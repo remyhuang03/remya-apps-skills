@@ -1,0 +1,85 @@
+name: Validate Remya apps
+on:
+  workflow_dispatch:
+    inputs:
+      settings_sha:
+        description: Full Settings commit SHA
+        required: true
+        default: cc30cccc8aaaf82dfc1fe8ff3644dde86d5fc1ff
+      bar_sha:
+        description: Full Bar commit SHA
+        required: true
+        default: acc82c056cf2f4239b6293ec6e024968f9545802
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    container: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [remya-settings, remya-bar]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate source refs
+        env:
+          SETTINGS_SHA: ${{ inputs.settings_sha }}
+          BAR_SHA: ${{ inputs.bar_sha }}
+        run: |
+          [[ "$SETTINGS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BAR_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Install Arch build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git curl cmake ninja clang rustup python \
+            gtk3 gtk-layer-shell glib2-devel wayland libxkbcommon libxcursor \
+            fontconfig libpipewire libpulse gstreamer gst-plugins-base-libs zstd unzip xz
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: remyhuang03/remya-settings
+          ref: ${{ inputs.settings_sha }}
+          path: apps/remya-settings
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: remyhuang03/remya-bar
+          ref: ${{ inputs.bar_sha }}
+          path: apps/remya-bar
+          persist-credentials: false
+      - name: Install FVM
+        run: |
+          fvm_archive=$(mktemp)
+          curl --fail --location --retry 3 \
+            https://github.com/btwld/fvm/releases/download/4.3.2/fvm-4.3.2-linux-x64-musl.tar.gz \
+            --output "$fvm_archive"
+          echo "6586128efc4d6ce4aff673c9a5b58e3684479d2b227bb843e55c960aa2c62aa1  $fvm_archive" | sha256sum -c -
+          tar -xzf "$fvm_archive" -C /opt
+          test -x /opt/fvm/fvm
+          ln -s /opt/fvm/fvm /usr/local/bin/fvm
+          fvm --version
+      - name: Validate, build, and package
+        env:
+          APP: ${{ matrix.app }}
+        run: |
+          useradd --create-home remya-ci
+          chown -R remya-ci:remya-ci apps
+          runuser -u remya-ci -- bash -euc '
+            cd "$1"
+            fvm install --skip-pub-get
+            rustup show
+            python3 "$2" --ci
+          ' bash "$PWD/apps/$APP" "$PWD/skills/remya-release/scripts/prepare_release.py"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ matrix.app }}-validation
+          path: |
+            apps/${{ matrix.app }}/build/ci-release/*/*.tar.zst
+            apps/${{ matrix.app }}/build/ci-release/*/SHA256SUMS
+            apps/${{ matrix.app }}/build/ci-release/*/manifest.json
+          if-no-files-found: error

@@ -1,0 +1,24 @@
+name: Validate release skill
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s test
+      - name: Install with the skills CLI
+        env:
+          DISABLE_TELEMETRY: "1"
+        run: |
+          project=$(mktemp -d)
+          cd "$project"
+          npx --yes skills@1.7.6 add "$GITHUB_WORKSPACE" --skill remya-release --agent codex --copy --yes
+          diff -r "$GITHUB_WORKSPACE/skills/remya-release" .agents/skills/remya-release
+          python3 .agents/skills/remya-release/scripts/prepare_release.py --help
