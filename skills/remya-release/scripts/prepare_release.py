@@ -146,7 +146,13 @@ def run_validation(root: Path, *, skip_desktop_smoke: bool) -> None:
     run(["cargo", "fmt", "--all", "--", "--check"], cwd=root)
     clippy = ["cargo", "clippy", "--locked", "--workspace", "--all-targets"]
     run(clippy if settings else [*clippy, "--", "-D", "warnings"], cwd=root)
-    run(["cargo", "test", "--locked", "--workspace"], cwd=root)
+    tests = ["cargo", "test", "--locked"]
+    if settings:
+        # Keep the service's bridge-free dependency features separate from the workspace test build.
+        run([*tests, "--workspace", "--exclude", "remya_settings_service"], cwd=root)
+        run([*tests, "-p", "remya_settings_service"], cwd=root)
+    else:
+        run([*tests, "--workspace"], cwd=root)
     run(["git", "diff", "--check"], cwd=root)
 
     if not settings and not skip_desktop_smoke:

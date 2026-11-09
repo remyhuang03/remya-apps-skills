@@ -14,7 +14,7 @@ Add `--global` for a user-level install when preparing a release from a clean ch
 
 ```bash
 npx skills add remyhuang03/remya-apps-skills --list
-npx skills add remyhuang03/remya-apps-skills@v0.1.0 --skill remya-release --agent codex
+npx skills add remyhuang03/remya-apps-skills@v0.1.1 --skill remya-release --agent codex
 ```
 
 ## Skills
