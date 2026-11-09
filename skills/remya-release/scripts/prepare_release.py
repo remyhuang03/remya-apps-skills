@@ -322,8 +322,9 @@ def main() -> int:
         print(f"README refreshed in {release_dir}. Present the README diff for release approval.")
         return 0
     if args.ci:
-        if git(root, "status", "--porcelain"):
-            raise RuntimeError("CI requires a clean source checkout")
+        dirty = git(root, "status", "--porcelain")
+        if dirty:
+            raise RuntimeError(f"CI requires a clean source checkout:\n{dirty}")
         run(["fvm", "flutter", "pub", "get", "--enforce-lockfile"], cwd=root)
     elif not args.skip_version_sync:
         sync_version_files(root, version)

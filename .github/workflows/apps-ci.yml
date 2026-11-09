@@ -70,8 +70,10 @@ jobs:
           useradd --create-home remya-ci
           chown -R remya-ci:remya-ci apps
           runuser -u remya-ci -- bash -euc '
+            flutter_version=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))[\"flutter\"])" "$1/.fvmrc")
+            cd "$HOME"
+            fvm install "$flutter_version" --skip-pub-get
             cd "$1"
-            fvm install --skip-pub-get
             rustup show
             python3 "$2" --ci
           ' bash "$PWD/apps/$APP" "$PWD/skills/remya-release/scripts/prepare_release.py"
