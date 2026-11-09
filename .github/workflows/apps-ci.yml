@@ -36,7 +36,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed git curl cmake ninja clang rustup python \
             gtk3 gtk-layer-shell glib2-devel wayland libxkbcommon libxcursor \
-            fontconfig libpipewire libpulse gstreamer gst-plugins-base-libs zstd unzip xz
+            fontconfig inter-font libpipewire libpulse gstreamer gst-plugins-base-libs zstd unzip xz
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
