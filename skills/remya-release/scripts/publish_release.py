@@ -78,6 +78,14 @@ def main() -> int:
     if not args.dry_run:
         if git(root, "status", "--porcelain"):
             raise RuntimeError("Commit the reviewed changes and use a clean worktree")
+        target = github_repo(root)
+        push_url = git(root, "remote", "get-url", "--push", "origin").removesuffix(".git")
+        if push_url not in {
+            f"https://github.com/{target}",
+            f"git@github.com:{target}",
+            f"ssh://git@github.com/{target}",
+        }:
+            raise RuntimeError(f"origin must push to the Remya release repository {target}")
         remote_main = git(root, "ls-remote", "--exit-code", "origin", "refs/heads/main").split()[0]
         if head != remote_main or head != git(root, "rev-parse", "refs/heads/main"):
             raise RuntimeError("HEAD must match both local and remote main")
