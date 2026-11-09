@@ -56,9 +56,9 @@ jobs:
         run: |
           fvm_archive=$(mktemp)
           curl --fail --location --retry 3 \
-            https://github.com/btwld/fvm/releases/download/4.3.2/fvm-4.3.2-linux-x64-musl.tar.gz \
+            https://github.com/btwld/fvm/releases/download/4.3.2/fvm-4.3.2-linux-x64.tar.gz \
             --output "$fvm_archive"
-          echo "6586128efc4d6ce4aff673c9a5b58e3684479d2b227bb843e55c960aa2c62aa1  $fvm_archive" | sha256sum -c -
+          echo "17dfced05f5b0cb32398dadd0691acc2bc458e8c4b0045a781cd5aa6c85f6ecb  $fvm_archive" | sha256sum -c -
           tar -xzf "$fvm_archive" -C /opt
           test -x /opt/fvm/fvm
           ln -s /opt/fvm/fvm /usr/local/bin/fvm
