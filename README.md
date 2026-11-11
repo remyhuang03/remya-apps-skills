@@ -4,18 +4,13 @@ Shared agent skills for the Remya Linux desktop applications.
 
 ## Install
 
-From a Remya application checkout, install the release skill for Codex:
+Install the release skill once at the user level for Codex:
 
 ```bash
-npx skills add remyhuang03/remya-apps-skills --skill remya-release --agent codex
+npx skills add remyhuang03/remya-apps-skills --skill remya-release --agent codex --global
 ```
 
-Add `--global` for a user-level install when preparing a release from a clean checkout. List skills or pin a repository version:
-
-```bash
-npx skills add remyhuang03/remya-apps-skills --list
-npx skills add remyhuang03/remya-apps-skills@v0.1.1 --skill remya-release --agent codex
-```
+Use `$remya-release` from either application checkout. Keep the same installed revision while preparing, reviewing, and publishing a candidate.
 
 ## Skills
 

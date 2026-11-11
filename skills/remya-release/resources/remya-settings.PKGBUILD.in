@@ -18,6 +18,7 @@ depends=(
   'gst-plugins-base-libs'
   'polkit'
   'pacman-contrib'
+  'sqlite'
   'glibc'
   'gcc-libs'
 )

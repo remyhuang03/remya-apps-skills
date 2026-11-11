@@ -34,7 +34,9 @@ class ReleaseSkillTest(unittest.TestCase):
                     self.assertEqual(repo_root(), checkout)
                 self.assertEqual(app_id(checkout), name)
                 self.assertEqual(read_current_versions(checkout), (version,) * (3 if project == "remya-settings" else 2))
-                self.assertIn(f"pkgname={project}-bin", render_pkgbuild(checkout, version, "a" * 64))
+                pkgbuild = render_pkgbuild(checkout, version, "a" * 64)
+                self.assertIn(f"pkgname={project}-bin", pkgbuild)
+                self.assertRegex(pkgbuild, r"(?m)^  'sqlite'$")
                 if project == "remya-bar":
                     self.assertTrue(sibling_client_sha256(checkout))
 
