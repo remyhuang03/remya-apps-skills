@@ -11,7 +11,7 @@ sys.dont_write_bytecode = True
 from prepare_release import read_current_versions, render_pkgbuild
 from release_checks import (
     VERSION, app_id, aur_package_names, bundle_sha256, git, github_repo, is_dev_version,
-    installed_bundle, repo_root, sha256_file, sibling_client_sha256,
+    installed_bundle, release_bundle, repo_root, sha256_file, sibling_core_sha256,
     skill_sha256, source_sha256,
 )
 
@@ -43,7 +43,7 @@ def verify_prepared_state(root: Path, version: str) -> tuple[Path, dict]:
     for aur_pkg in aur_package_names(project, version):
         aur_dir = release_dir / "aur" / aur_pkg
         expected = render_pkgbuild(
-            aur_pkg, version, archive_hash, settings_version=manifest.get("settings_version", "")
+            aur_pkg, version, archive_hash, core_version=manifest.get("core_version", "")
         )
         if (aur_dir / "PKGBUILD").read_text() != expected:
             raise RuntimeError(f"Staged AUR PKGBUILD for {aur_pkg} does not match the prepared release")
@@ -56,10 +56,10 @@ def verify_prepared_state(root: Path, version: str) -> tuple[Path, dict]:
 
     if manifest.get("skill_sha256") != skill_sha256():
         raise RuntimeError("The release skill changed after preparation")
-    if app_id(root) in {"remya_bar", "remya_screen_capture"} and manifest.get("settings_client_sha256") != sibling_client_sha256(root):
-        raise RuntimeError("The sibling Settings client changed after preparation")
+    if app_id(root) != "remya_core" and manifest.get("core_packages_sha256") != sibling_core_sha256(root):
+        raise RuntimeError("The sibling Core packages changed after preparation")
 
-    for bundle in (root / "build/linux/x64/release/bundle", installed_bundle(app_id(root))):
+    for bundle in (release_bundle(root), installed_bundle(app_id(root))):
         if bundle_sha256(bundle, app_id(root)) != manifest["bundle_sha256"]:
             raise RuntimeError(f"Bundle changed after preparation: {bundle}")
     return archive, manifest

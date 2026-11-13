@@ -25,7 +25,7 @@ import tempfile
 sys.dont_write_bytecode = True
 from release_checks import (
     VERSION, app_id, aur_package_names, bundle_sha256, git, installed_bundle,
-    is_dev_version, repo_root, sha256_file, sibling_client_sha256, skill_root,
+    is_dev_version, release_bundle, repo_root, sha256_file, sibling_core_sha256, skill_root,
     skill_sha256, source_sha256,
 )
 
@@ -38,8 +38,8 @@ def run(cmd: list[str], *, cwd: Path, check: bool = True, capture: bool = False)
 
 
 def pubspec_paths(root: Path) -> tuple[str, ...]:
-    if app_id(root) == "remya_settings":
-        return ("pubspec.yaml", "packages/remya_settings_client/pubspec.yaml")
+    if app_id(root) == "remya_core":
+        return ("packages/remya_client/pubspec.yaml", "packages/remya_ui/pubspec.yaml")
     return ("pubspec.yaml",)
 
 
@@ -131,37 +131,46 @@ def sync_version_files(root: Path, version: str) -> None:
         raise RuntimeError("Failed to update version in Cargo.toml")
     cargo_path.write_text(new_cargo)
 
-    run(["fvm", "flutter", "pub", "get"], cwd=root)
+    fetch_dart_dependencies(root)
     run(["cargo", "metadata", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu"], cwd=root, capture=True)
     if app_id(root) == "remya_screen_capture":
         notices = (root / "lib/src/rust/capture/THIRD_PARTY_NOTICES.txt").read_text()
         if f"Cargo.lock SHA-256: {sha256_file(root / 'Cargo.lock')}" not in notices.splitlines():
             raise RuntimeError("Update the Screen Capture Rust notices for the current Cargo.lock")
-    else:
+    elif app_id(root) != "remya_launcher":
         run([sys.executable, "tool/generate_rust_notices.py"], cwd=root)
 
 
+def fetch_dart_dependencies(root: Path, *, locked: bool = False) -> None:
+    suffix = ["--enforce-lockfile"] if locked else []
+    if app_id(root) == "remya_core":
+        for relative, command in (("packages/remya_client", "dart"), ("packages/remya_ui", "flutter"), ("tool", "dart")):
+            run(["fvm", command, "pub", "get", *suffix], cwd=root / relative)
+    else:
+        run(["fvm", "flutter", "pub", "get", *suffix], cwd=root)
+
+
 def run_validation(root: Path, *, skip_desktop_smoke: bool) -> None:
-    settings = app_id(root) == "remya_settings"
-    paths = ["lib", "test", "packages"] if settings else ["lib", "test"]
-    run(["fvm", "dart", "format", "--output=none", "--set-exit-if-changed", *paths], cwd=root)
-    run(["fvm", "flutter", "analyze"], cwd=root)
-    run(["fvm", "flutter", "test"], cwd=root)
-    if settings:
+    core = app_id(root) == "remya_core"
+    if core:
+        run(["fvm", "dart", "format", "--output=none", "--set-exit-if-changed", "packages", "tool"], cwd=root)
+        for relative, command in (("packages/remya_client", "dart"), ("packages/remya_ui", "flutter"), ("tool", "dart")):
+            run(["fvm", command, "analyze"], cwd=root / relative)
+    else:
+        run(["fvm", "dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"], cwd=root)
+        run(["fvm", "flutter", "analyze"], cwd=root)
+        run(["fvm", "flutter", "test"], cwd=root)
+    if app_id(root) == "remya_settings":
         run([sys.executable, "-m", "unittest", "test/xdg_install_test.py"], cwd=root)
+    if app_id(root) == "remya_launcher":
+        run([sys.executable, "-m", "unittest", "tool/test_install.py"], cwd=root)
     run(["cargo", "fmt", "--all", "--", "--check"], cwd=root)
     clippy = ["cargo", "clippy", "--locked", "--workspace", "--all-targets"]
-    run(clippy if settings else [*clippy, "--", "-D", "warnings"], cwd=root)
-    tests = ["cargo", "test", "--locked"]
-    if settings:
-        # Keep the service's bridge-free dependency features separate from the workspace test build.
-        run([*tests, "--workspace", "--exclude", "remya_settings_service"], cwd=root)
-        run([*tests, "-p", "remya_settings_service"], cwd=root)
-    else:
-        run([*tests, "--workspace"], cwd=root)
+    run(clippy if app_id(root) == "remya_settings" else [*clippy, "--", "-D", "warnings"], cwd=root)
+    run(["cargo", "test", "--locked", "--workspace"], cwd=root)
     run(["git", "diff", "--check"], cwd=root)
 
-    if not settings and not skip_desktop_smoke:
+    if app_id(root) in {"remya_bar", "remya_launcher", "remya_screen_capture"} and not skip_desktop_smoke:
         run(["fvm", "flutter", "build", "linux", "--debug"], cwd=root)
         if app_id(root) != "remya_bar":
             return
@@ -184,8 +193,12 @@ def invalidate_icon_stamps(root: Path) -> None:
 def build_release(root: Path) -> str:
     if app_id(root) == "remya_settings":
         invalidate_icon_stamps(root)
-    run(["fvm", "flutter", "build", "linux", "--release"], cwd=root)
-    return bundle_sha256(root / "build/linux/x64/release/bundle", app_id(root))
+    if app_id(root) == "remya_core":
+        run(["cargo", "build", "--locked", "--release", "-p", "remya_service", "-p", "remya_updates"], cwd=root)
+        run(["fvm", "dart", "compile", "exe", "tool/remya_cli.dart", "-o", "target/release/remya"], cwd=root)
+    else:
+        run(["fvm", "flutter", "build", "linux", "--release"], cwd=root)
+    return bundle_sha256(release_bundle(root), app_id(root))
 
 
 def install_staged_release(root: Path, release_dir: Path, version: str, built_hash: str) -> None:
@@ -198,17 +211,19 @@ def install_staged_release(root: Path, release_dir: Path, version: str, built_ha
     if bundle_sha256(installed_bundle(app_id(root)), app_id(root)) != built_hash:
         raise RuntimeError("Installed workstation bundle differs from the built bundle")
     unit = f"top.{app_id(root).replace('_', '.')}.service"
-    if app_id(root) != "remya_screen_capture":
+    if app_id(root) == "remya_launcher":
+        unit = "top.remya.launcher.clipboard.service"
+    if app_id(root) in {"remya_core", "remya_bar", "remya_launcher"}:
         run(["systemctl", "--user", "is-active", "--quiet", unit], cwd=root)
 
 
-def render_pkgbuild(pkgname: str, version: str, archive_hash: str, *, settings_version: str = "") -> str:
+def render_pkgbuild(pkgname: str, version: str, archive_hash: str, *, core_version: str = "") -> str:
     template = (skill_root() / f"resources/{pkgname}.PKGBUILD.in").read_text()
-    if "@SETTINGS_VER@" in template and not VERSION.fullmatch(settings_version):
-        raise ValueError("The Screen Capture source package requires a published Settings version")
+    if "@CORE_VER@" in template and not VERSION.fullmatch(core_version):
+        raise ValueError("The source package requires a published Core version")
     return (
         template.replace("@UPSTREAM_VER@", version)
-        .replace("@SETTINGS_VER@", settings_version)
+        .replace("@CORE_VER@", core_version)
         .replace("@PKGVER@", version.replace("-", "_"))
         .replace("@SHA256@", archive_hash)
     )
@@ -230,31 +245,30 @@ def stage_release_artifacts(root: Path, version: str, manifest: dict, *, ci: boo
 def write_release_artifacts(root: Path, version: str, manifest: dict, release_dir: Path) -> None:
     stem = f"{app_id(root)}-{version}-linux-x86_64"
     staging_root = release_dir / stem
-    bundle_dst = staging_root / "build/linux/x64/release/bundle"
+    core = app_id(root) == "remya_core"
+    bundle_dst = staging_root / ("target/release" if core else "build/linux/x64/release/bundle")
     bundle_dst.parent.mkdir(parents=True)
-    shutil.copytree(root / "build/linux/x64/release/bundle", bundle_dst, symlinks=True)
+    if core:
+        bundle_dst.mkdir()
+        for binary in ("remyad", "remya-core-update", "remya"):
+            shutil.copy2(release_bundle(root) / binary, bundle_dst / binary)
+    else:
+        shutil.copytree(release_bundle(root), bundle_dst, symlinks=True)
 
     common = ("tool/install.py", "LICENSE", "README.md")
-    if app_id(root) != "remya_screen_capture":
+    if app_id(root) not in {"remya_screen_capture", "remya_launcher"}:
         common += ("assets/licenses/rust-dependencies.txt",)
-    extras = (
-        "tool/install_system_updater.py",
-        "linux/packaging/top.remya.settings.desktop",
-        "linux/packaging/top.remya.settings.appimage.desktop",
-        "linux/packaging/top.remya.settings.Service1.service",
-        "assets/icons/app_icon.svg",
-        "assets/licenses/croppy-kiwi.txt",
-    ) if app_id(root) == "remya_settings" else (
-        "linux/packaging/top.remya.bar.desktop",
-        "assets/icons/app_icon.svg",
-    )
-    if app_id(root) == "remya_screen_capture":
-        extras = (
-            "linux/packaging/top.remya.screen_capture.desktop",
-            "assets/icons/app_icon.svg",
-            "assets/licenses/material-symbols.txt",
-            "lib/src/rust/capture/THIRD_PARTY_NOTICES.txt",
-        )
+    if core:
+        extras = ("tool/install_system_updater.py", "packaging/top.remya.Core1.service")
+    else:
+        package = "top.remya.screen_capture" if app_id(root) == "remya_screen_capture" else "top." + app_id(root).replace("_", ".")
+        extras = (f"linux/packaging/{package}.desktop", "assets/icons/app_icon.svg")
+        if app_id(root) == "remya_settings":
+            extras += ("linux/packaging/top.remya.settings.appimage.desktop", "assets/licenses/croppy-kiwi.txt")
+        else:
+            extras += (f"linux/packaging/{app_id(root).replace('_', '-')}.json",)
+        if app_id(root) == "remya_screen_capture":
+            extras += ("assets/licenses/material-symbols.txt", "lib/src/rust/capture/THIRD_PARTY_NOTICES.txt")
     for relative in (*common, *extras):
         target = staging_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -286,7 +300,7 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
         aur_dir = release_dir / "aur" / aur_pkg
         aur_dir.mkdir(parents=True, exist_ok=True)
         (aur_dir / "PKGBUILD").write_text(render_pkgbuild(
-            aur_pkg, version, archive_hash, settings_version=manifest.get("settings_version", "")
+            aur_pkg, version, archive_hash, core_version=manifest.get("core_version", "")
         ))
         aur_srcinfo = run(["makepkg", "--printsrcinfo"], cwd=aur_dir, capture=True).stdout
         (aur_dir / ".SRCINFO").write_text(aur_srcinfo)
@@ -314,9 +328,9 @@ def refresh_readme(root: Path, version: str) -> Path:
         raise RuntimeError("Candidate sources changed beyond README files. Prepare and review a new candidate.")
     if manifest.get("skill_sha256") != skill_sha256():
         raise RuntimeError("The release skill changed. Prepare and review a new candidate.")
-    if app_id(root) == "remya_bar" and manifest.get("settings_client_sha256") != sibling_client_sha256(root):
-        raise RuntimeError("The sibling Settings client changed. Prepare and review a new candidate.")
-    for bundle in (root / "build/linux/x64/release/bundle", installed_bundle(app_id(root))):
+    if app_id(root) != "remya_core" and manifest.get("core_packages_sha256") != sibling_core_sha256(root):
+        raise RuntimeError("The sibling Core packages changed. Prepare and review a new candidate.")
+    for bundle in (release_bundle(root), installed_bundle(app_id(root))):
         if bundle_sha256(bundle, app_id(root)) != manifest["bundle_sha256"]:
             raise RuntimeError(f"Bundle changed after candidate preparation: {bundle}")
     archive = release_dir / f"{app_id(root)}-{version}-linux-x86_64.tar.zst"
@@ -375,7 +389,7 @@ def main() -> int:
         dirty = git(root, "status", "--porcelain")
         if dirty:
             raise RuntimeError(f"CI requires a clean source checkout:\n{dirty}")
-        run(["fvm", "flutter", "pub", "get", "--enforce-lockfile"], cwd=root)
+        fetch_dart_dependencies(root, locked=True)
     elif not args.skip_version_sync:
         sync_version_files(root, version)
 
@@ -383,12 +397,12 @@ def main() -> int:
         run_validation(root, skip_desktop_smoke=args.ci or args.skip_desktop_smoke)
 
     source_hash = source_sha256(root)
-    client_hash = sibling_client_sha256(root) if app_id(root) in {"remya_bar", "remya_screen_capture"} else None
+    core_hash = sibling_core_sha256(root) if app_id(root) != "remya_core" else None
     bundle_hash = build_release(root)
     if source_sha256(root) != source_hash:
         raise RuntimeError("Source files changed during the release build")
-    if client_hash is not None and sibling_client_sha256(root) != client_hash:
-        raise RuntimeError("The sibling Settings client changed during the build")
+    if core_hash is not None and sibling_core_sha256(root) != core_hash:
+        raise RuntimeError("The sibling Core packages changed during the build")
     package = f"top.{app_id(root).replace('_', '.')}"
     manifest = {
         "app_id": app_id(root),
@@ -405,13 +419,12 @@ def main() -> int:
         "readme_refreshed": False,
         "skill_sha256": skill_sha256(),
     }
-    if app_id(root) == "remya_screen_capture":
-        settings_versions = read_current_versions(root.parent / "remya-settings")
-        if len(set(settings_versions)) != 1 or not VERSION.fullmatch(settings_versions[0]):
-            raise RuntimeError("Screen Capture requires matching Settings and client release versions")
-        manifest["settings_version"] = settings_versions[0]
-    if client_hash is not None:
-        manifest["settings_client_sha256"] = client_hash
+    if core_hash is not None:
+        core_versions = read_current_versions(root.parent / "remya-core")
+        if len(set(core_versions)) != 1 or not VERSION.fullmatch(core_versions[0]):
+            raise RuntimeError("Core package and workspace release versions must match")
+        manifest["core_version"] = core_versions[0]
+        manifest["core_packages_sha256"] = core_hash
     release_dir = stage_release_artifacts(root, version, manifest, ci=args.ci)
     if args.ci:
         run(["sha256sum", "-c", "SHA256SUMS"], cwd=release_dir)

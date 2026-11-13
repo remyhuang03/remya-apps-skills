@@ -1,0 +1,83 @@
+# Maintainer: Remy Huang <me@remya.top>
+pkgname=remya-core-git
+_app_id=remya_core
+_upstream_ver=@UPSTREAM_VER@
+pkgver=@PKGVER@
+pkgrel=1
+pkgdesc="Shared Remya daemon, updater and CLI (git)"
+arch=('x86_64')
+url="https://github.com/remyhuang03/remya-core"
+license=('LicenseRef-PolyForm-Noncommercial-1.0.0')
+depends=(
+  'networkmanager'
+  'bluez'
+  'libpulse'
+  'pipewire'
+  'gstreamer'
+  'gst-plugins-base-libs'
+  'polkit'
+  'pacman-contrib'
+  'sqlite'
+  'glibc'
+  'gcc-libs'
+)
+makedepends=(
+  'clang'
+  'cmake'
+  'fvm'
+  'git'
+  'ninja'
+  'python'
+  'rust'
+)
+provides=('remya-core')
+conflicts=('remya-core' 'remya-core-bin')
+options=('!strip' '!lto')
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${srcdir}/remya-core"
+  local ver
+  ver=$(sed -n 's/^version:[[:space:]]*//p' packages/remya_client/pubspec.yaml | head -n1 | tr '-' '_')
+  printf "%s.r%s.g%s" "${ver}" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "${srcdir}/remya-core"
+  fvm install
+  cargo build --locked --release -p remya_service -p remya_updates
+  (cd packages/remya_client && fvm dart pub get --enforce-lockfile)
+  (cd tool && fvm dart pub get --enforce-lockfile)
+  fvm dart compile exe tool/remya_cli.dart -o target/release/remya
+}
+
+package() {
+  cd "${srcdir}/remya-core"
+
+  install -d "${pkgdir}/usr/lib/remya-core" "${pkgdir}/usr/bin"
+  install -m755 target/release/{remyad,remya-core-update,remya} "${pkgdir}/usr/lib/remya-core/"
+  ln -s /usr/lib/remya-core/remya "${pkgdir}/usr/bin/remya"
+
+  install -Dm644 packaging/top.remya.Core1.service "${pkgdir}/usr/share/dbus-1/services/top.remya.Core1.service"
+  sed -i 's|@REMYAD@|/usr/lib/remya-core/remyad|' "${pkgdir}/usr/share/dbus-1/services/top.remya.Core1.service"
+  install -d "${pkgdir}/usr/lib/systemd/user"
+  cat > "${pkgdir}/usr/lib/systemd/user/top.remya.core.service" << 'EOF'
+[Unit]
+Description=Remya Core service
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=top.remya.Core1
+ExecStart=/usr/lib/remya-core/remyad
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 assets/licenses/rust-dependencies.txt "${pkgdir}/usr/share/licenses/${pkgname}/rust-dependencies.txt"
+}

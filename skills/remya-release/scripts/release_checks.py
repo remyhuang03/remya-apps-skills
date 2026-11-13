@@ -32,7 +32,9 @@ def repo_root() -> Path:
 
 
 def app_id(root: Path) -> str:
-    match = re.search(r"^name:[ \t]*(remya_bar|remya_settings|remya_screen_capture)[ \t]*$", (root / "pubspec.yaml").read_text(), re.MULTILINE)
+    if not (root / "pubspec.yaml").exists() and (root / "tool/remya_cli.dart").is_file():
+        return "remya_core"
+    match = re.search(r"^name:[ \t]*(remya_bar|remya_settings|remya_launcher|remya_screen_capture)[ \t]*$", (root / "pubspec.yaml").read_text(), re.MULTILINE)
     if not match:
         raise RuntimeError("Run from a Remya application checkout")
     return match.group(1)
@@ -52,12 +54,16 @@ def github_repo(root: Path) -> str:
     return "remyhuang03/" + app_id(root).replace("_", "-")
 
 
-def sibling_client_sha256(root: Path) -> str:
-    sibling = root.parent / "remya-settings"
-    client = "packages/remya_settings_client"
-    if not (sibling / client / "pubspec.yaml").is_file():
-        raise RuntimeError("Check out the matching Remya Settings repository beside Bar")
-    return source_sha256(sibling, client)
+def sibling_core_sha256(root: Path) -> str:
+    sibling = root.parent / "remya-core"
+    packages = ("packages/remya_client", "packages/remya_ui")
+    if not all((sibling / package / "pubspec.yaml").is_file() for package in packages):
+        raise RuntimeError("Check out the matching Remya Core repository beside the application")
+    return source_sha256(sibling, *packages)
+
+
+def release_bundle(root: Path) -> Path:
+    return root / ("target/release" if app_id(root) == "remya_core" else "build/linux/x64/release/bundle")
 
 
 def sha256_file(path: Path) -> str:
@@ -87,6 +93,13 @@ def source_sha256(root: Path, *pathspecs: str) -> str:
 
 
 def bundle_sha256(bundle: Path, app_id: str) -> str:
+    if app_id == "remya_core":
+        binaries = [Path(name) for name in ("remyad", "remya-core-update", "remya")]
+        if not all((bundle / binary).is_file() for binary in binaries):
+            raise RuntimeError(f"Incomplete release bundle: {bundle}")
+        return files_sha256(bundle, binaries)
+    if app_id == "remya_launcher" and not (bundle / "remya-launcher-clipboard").is_file():
+        raise RuntimeError(f"Incomplete release bundle: {bundle}")
     if not (bundle / app_id).is_file() or not (bundle / "lib/libapp.so").is_file():
         raise RuntimeError(f"Incomplete release bundle: {bundle}")
     return files_sha256(bundle, [path.relative_to(bundle) for path in bundle.rglob("*")])
