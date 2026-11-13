@@ -4,10 +4,10 @@ Shared agent skills for the Remya Linux desktop applications.
 
 ## Install
 
-Install the skills once at the user level for Codex:
+Install the skills once at the user level (works with Codex, Claude Code, Antigravity / `agy`, and other agents supported by `npx skills`):
 
 ```bash
-npx skills add remyhuang03/remya-apps-skills --skill remya-release --skill remya-readme --agent codex --global
+npx skills add remyhuang03/remya-apps-skills --skill remya-release --skill remya-readme --global
 ```
 
 Use `$remya-release` from either application checkout. Keep the same installed revision while preparing, reviewing, and publishing a candidate.
