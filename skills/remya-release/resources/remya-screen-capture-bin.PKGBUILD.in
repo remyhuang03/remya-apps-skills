@@ -8,7 +8,7 @@ pkgdesc="Screen capture, recording and editing for Hyprland"
 arch=('x86_64')
 url="https://github.com/remyhuang03/remya-screen-capture"
 license=('LicenseRef-PolyForm-Noncommercial-1.0.0')
-depends=('gtk3' 'gtk-layer-shell' 'wayland' 'hyprland' 'grim>=1.5'
+depends=('remya-core' 'gtk3' 'gtk-layer-shell' 'wayland' 'hyprland' 'grim>=1.5'
          'wl-clipboard' 'fontconfig' 'inter-font' 'gpu-screen-recorder'
          'ffmpeg' 'mpv' 'libepoxy' 'xdg-utils' 'glibc' 'gcc-libs')
 options=('!strip')
@@ -24,6 +24,7 @@ package() {
   ln -s "/usr/lib/${_app_id}/${_app_id}" "${pkgdir}/usr/bin/${_app_id}"
   install -Dm644 linux/packaging/top.remya.screen_capture.desktop \
     "${pkgdir}/usr/share/applications/top.remya.screen_capture.desktop"
+  install -Dm644 linux/packaging/remya-screen-capture.json "${pkgdir}/usr/share/remya/apps/remya-screen-capture.json"
   install -Dm644 assets/icons/app_icon.svg \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/top.remya.screen_capture.svg"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
