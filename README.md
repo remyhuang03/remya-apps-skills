@@ -4,10 +4,10 @@ Shared agent skills for the Remya Linux desktop applications.
 
 ## Install
 
-Install the release skill once at the user level for Codex:
+Install the skills once at the user level for Codex:
 
 ```bash
-npx skills add remyhuang03/remya-apps-skills --skill remya-release --agent codex --global
+npx skills add remyhuang03/remya-apps-skills --skill remya-release --skill remya-readme --agent codex --global
 ```
 
 Use `$remya-release` from either application checkout. Keep the same installed revision while preparing, reviewing, and publishing a candidate.
@@ -15,6 +15,7 @@ Use `$remya-release` from either application checkout. Keep the same installed r
 ## Skills
 
 - [remya-release](skills/remya-release/SKILL.md) prepares and verifies releases for [Remya Bar](https://github.com/remyhuang03/remya-bar) and [Remya Settings](https://github.com/remyhuang03/remya-settings). It preserves the workstation and README approval steps for GitHub and AUR releases.
+- [remya-readme](skills/remya-readme/SKILL.md) updates and synchronizes multilingual README files (`README.md` and `docs/README.*.md` in 7 languages) using `gemini-4-hydrogen-medium`.
 
 ## CI
 

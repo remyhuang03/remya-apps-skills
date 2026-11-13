@@ -11,6 +11,16 @@ VERSION = re.compile(
 )
 
 
+def is_dev_version(version: str) -> bool:
+    return "-dev." in version
+
+
+def aur_package_names(project: str, version: str) -> tuple[str, ...]:
+    if is_dev_version(version):
+        return (f"{project}-git",)
+    return (project, f"{project}-bin")
+
+
 def git(root: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
 

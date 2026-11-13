@@ -19,6 +19,8 @@ jobs:
         run: |
           project=$(mktemp -d)
           cd "$project"
-          npx --yes skills@1.7.6 add "$GITHUB_WORKSPACE" --skill remya-release --agent codex --copy --yes
+          npx --yes skills@1.7.6 add "$GITHUB_WORKSPACE" --skill remya-release --skill remya-readme --agent codex --copy --yes
           diff -r "$GITHUB_WORKSPACE/skills/remya-release" .agents/skills/remya-release
+          diff -r "$GITHUB_WORKSPACE/skills/remya-readme" .agents/skills/remya-readme
           python3 .agents/skills/remya-release/scripts/prepare_release.py --help
+          python3 .agents/skills/remya-readme/scripts/update_readme.py --help

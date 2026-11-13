@@ -24,8 +24,9 @@ import tempfile
 
 sys.dont_write_bytecode = True
 from release_checks import (
-    VERSION, app_id, bundle_sha256, git, installed_bundle, repo_root,
-    sha256_file, sibling_client_sha256, skill_root, skill_sha256, source_sha256,
+    VERSION, app_id, aur_package_names, bundle_sha256, git, installed_bundle,
+    is_dev_version, repo_root, sha256_file, sibling_client_sha256, skill_root,
+    skill_sha256, source_sha256,
 )
 
 DEV_VERSION_RE = re.compile(r"^(\d+\.\d+\.\d+)-dev\.(\d{8})\.(\d+)$")
@@ -78,11 +79,11 @@ def existing_tag_sequences(root: Path, base: str, date_str: str) -> list[int]:
 def resolve_target_version(root: Path, requested: str | None, *, bump: bool, allow_stable: bool) -> str:
     pub_ver, *_, cargo_ver = read_current_versions(root)
     if requested:
-        if VERSION.fullmatch(requested) and ("-dev." in requested or allow_stable):
+        if VERSION.fullmatch(requested) and (is_dev_version(requested) or allow_stable):
             return requested
         raise ValueError(
-            f"Invalid version {requested!r}: expected <major>.<minor>.<patch>-dev.<YYYYMMDD>.<seq> "
-            "(e.g. 0.1.0-dev.20261109.0)"
+            f"Invalid version {requested!r}: expected <major>.<minor>.<patch>-dev.<YYYYMMDD>.<seq>, "
+            "or pass --allow-stable for X.Y.Z (alpha/beta/stable) releases"
         )
 
     base_match = re.match(r"^(\d+\.\d+\.\d+)", cargo_ver) or re.match(r"^(\d+\.\d+\.\d+)", pub_ver)
@@ -193,9 +194,8 @@ def install_staged_release(root: Path, release_dir: Path, version: str, built_ha
     run(["systemctl", "--user", "is-active", "--quiet", unit], cwd=root)
 
 
-def render_pkgbuild(root: Path, version: str, archive_hash: str) -> str:
-    project = app_id(root).replace("_", "-")
-    template = (skill_root() / f"resources/{project}.PKGBUILD.in").read_text()
+def render_pkgbuild(pkgname: str, version: str, archive_hash: str) -> str:
+    template = (skill_root() / f"resources/{pkgname}.PKGBUILD.in").read_text()
     return (
         template.replace("@UPSTREAM_VER@", version)
         .replace("@PKGVER@", version.replace("-", "_"))
@@ -239,6 +239,10 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
         target = staging_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / relative, target)
+    for localized_readme in sorted(root.glob("docs/README.*.md")):
+        target = staging_root / localized_readme.relative_to(root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(localized_readme, target)
 
     archive_name = f"{stem}.tar.zst"
     archive_path = release_dir / archive_name
@@ -252,15 +256,31 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
     archive_hash = sha256_file(archive_path)
     (release_dir / "SHA256SUMS").write_text(f"{archive_hash}  {archive_name}\n")
 
-    (release_dir / "PKGBUILD").write_text(render_pkgbuild(root, version, archive_hash))
+    project = app_id(root).replace("_", "-")
+    (release_dir / "PKGBUILD").write_text(render_pkgbuild(f"{project}-bin", version, archive_hash))
     srcinfo = run(["makepkg", "--printsrcinfo"], cwd=release_dir, capture=True).stdout
     (release_dir / ".SRCINFO").write_text(srcinfo)
-    manifest = {**manifest, "archive_name": archive_name, "archive_sha256": archive_hash}
+
+    aur_packages = aur_package_names(project, version)
+    for aur_pkg in aur_packages:
+        aur_dir = release_dir / "aur" / aur_pkg
+        aur_dir.mkdir(parents=True, exist_ok=True)
+        (aur_dir / "PKGBUILD").write_text(render_pkgbuild(aur_pkg, version, archive_hash))
+        aur_srcinfo = run(["makepkg", "--printsrcinfo"], cwd=aur_dir, capture=True).stdout
+        (aur_dir / ".SRCINFO").write_text(aur_srcinfo)
+
+    manifest = {
+        **manifest,
+        "archive_name": archive_name,
+        "archive_sha256": archive_hash,
+        "dev": is_dev_version(version),
+        "aur_packages": list(aur_packages),
+    }
     (release_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def candidate_source_sha256(root: Path) -> str:
-    return source_sha256(root, ":(exclude,top)README.md")
+    return source_sha256(root, ":(exclude,top)README.md", ":(exclude,glob)docs/README.*.md")
 
 
 def refresh_readme(root: Path, version: str) -> Path:
@@ -269,7 +289,7 @@ def refresh_readme(root: Path, version: str) -> Path:
     if (manifest["app_id"], manifest["version"]) != (app_id(root), version):
         raise RuntimeError("Candidate manifest does not match this project and version")
     if manifest.get("candidate_source_sha256") != candidate_source_sha256(root):
-        raise RuntimeError("Candidate sources changed beyond README.md. Prepare and review a new candidate.")
+        raise RuntimeError("Candidate sources changed beyond README files. Prepare and review a new candidate.")
     if manifest.get("skill_sha256") != skill_sha256():
         raise RuntimeError("The release skill changed. Prepare and review a new candidate.")
     if app_id(root) == "remya_bar" and manifest.get("settings_client_sha256") != sibling_client_sha256(root):
@@ -379,6 +399,9 @@ def main() -> int:
     print(f"  - {release_dir / 'SHA256SUMS'}")
     print(f"  - {release_dir / 'PKGBUILD'}")
     print(f"  - {release_dir / '.SRCINFO'}")
+    for aur_pkg in aur_package_names(app_id(root).replace("_", "-"), version):
+        print(f"  - {release_dir / 'aur' / aur_pkg / 'PKGBUILD'}")
+        print(f"  - {release_dir / 'aur' / aur_pkg / '.SRCINFO'}")
     print("============================================================")
     print("STOP HERE: Get candidate approval before asking Gemini to update README.md.")
     return 0

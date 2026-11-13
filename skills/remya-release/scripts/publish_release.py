@@ -10,8 +10,9 @@ import sys
 sys.dont_write_bytecode = True
 from prepare_release import read_current_versions, render_pkgbuild
 from release_checks import (
-    VERSION, app_id, bundle_sha256, git, github_repo, installed_bundle, repo_root,
-    sha256_file, sibling_client_sha256, skill_sha256, source_sha256,
+    VERSION, app_id, aur_package_names, bundle_sha256, git, github_repo,
+    installed_bundle, repo_root, sha256_file, sibling_client_sha256,
+    skill_sha256, source_sha256,
 )
 
 
@@ -32,11 +33,20 @@ def verify_prepared_state(root: Path, version: str) -> tuple[Path, dict]:
     ):
         raise RuntimeError("Staged archive or SHA256SUMS changed after preparation")
 
-    if (release_dir / "PKGBUILD").read_text() != render_pkgbuild(root, version, archive_hash):
+    project = app_id(root).replace("_", "-")
+    if (release_dir / "PKGBUILD").read_text() != render_pkgbuild(f"{project}-bin", version, archive_hash):
         raise RuntimeError("Staged PKGBUILD does not match the prepared archive")
     srcinfo = subprocess.check_output(["makepkg", "--printsrcinfo"], cwd=release_dir, text=True)
     if (release_dir / ".SRCINFO").read_text() != srcinfo:
         raise RuntimeError("Staged .SRCINFO does not match PKGBUILD")
+
+    for aur_pkg in aur_package_names(project, version):
+        aur_dir = release_dir / "aur" / aur_pkg
+        if (aur_dir / "PKGBUILD").read_text() != render_pkgbuild(aur_pkg, version, archive_hash):
+            raise RuntimeError(f"Staged AUR PKGBUILD for {aur_pkg} does not match the prepared release")
+        aur_srcinfo = subprocess.check_output(["makepkg", "--printsrcinfo"], cwd=aur_dir, text=True)
+        if (aur_dir / ".SRCINFO").read_text() != aur_srcinfo:
+            raise RuntimeError(f"Staged AUR .SRCINFO for {aur_pkg} does not match PKGBUILD")
 
     if source_sha256(root) != manifest["source_sha256"]:
         raise RuntimeError("Source changed after preparation. Rebuild and review it before publishing.")
@@ -60,6 +70,7 @@ def main() -> int:
         help="Confirm explicit approval of both the installed candidate and the README review",
     )
     parser.add_argument("--notes-file", type=Path, help="Reviewed GitHub release notes")
+    parser.add_argument("--prerelease", action="store_true", help="Mark GitHub release as prerelease (e.g. alpha/beta)")
     parser.add_argument("--dry-run", action="store_true", help="Check prepared artifacts and print commands")
     args = parser.parse_args()
     if not args.dry_run and not args.confirm_user_approved:
@@ -101,7 +112,7 @@ def main() -> int:
         "gh", "release", "create", tag, "--repo", github_repo(root), "--verify-tag",
         "--title", tag, str(archive), str(archive.with_name("SHA256SUMS")),
     ]
-    if "-" in args.version:
+    if "-" in args.version or args.prerelease:
         release.append("--prerelease")
     if args.notes_file:
         release.extend(["--notes-file", str(args.notes_file.resolve(strict=True))])

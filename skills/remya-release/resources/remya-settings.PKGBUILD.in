@@ -1,5 +1,5 @@
 # Maintainer: Remy Huang <me@remya.top>
-pkgname=remya-settings-bin
+pkgname=remya-settings
 _app_id=remya_settings
 _upstream_ver=@UPSTREAM_VER@
 pkgver=@PKGVER@
@@ -22,14 +22,28 @@ depends=(
   'glibc'
   'gcc-libs'
 )
-provides=("remya-settings=${pkgver}")
-conflicts=('remya-settings')
+makedepends=(
+  'clang'
+  'cmake'
+  'fvm'
+  'ninja'
+  'python'
+  'rust'
+)
+conflicts=('remya-settings-bin' 'remya-settings-git')
 options=('!strip')
-source=("${_app_id}-${_upstream_ver}-linux-x86_64.tar.zst::${url}/releases/download/v${_upstream_ver}/${_app_id}-${_upstream_ver}-linux-x86_64.tar.zst")
-sha256sums=('@SHA256@')
+source=("remya-settings-${_upstream_ver}.tar.gz::${url}/archive/refs/tags/v${_upstream_ver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "${srcdir}/remya-settings-${_upstream_ver}"
+  fvm install
+  fvm flutter pub get --enforce-lockfile
+  fvm flutter build linux --release
+}
 
 package() {
-  cd "${srcdir}/${_app_id}-${_upstream_ver}-linux-x86_64"
+  cd "${srcdir}/remya-settings-${_upstream_ver}"
 
   install -d "${pkgdir}/usr/lib/${_app_id}"
   cp -a build/linux/x64/release/bundle/remya_settings "${pkgdir}/usr/lib/${_app_id}/"

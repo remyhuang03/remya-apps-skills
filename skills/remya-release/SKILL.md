@@ -11,23 +11,27 @@ Run the Python helpers from inside the application checkout. Use the absolute pa
 
 ## 1. Prepare and install the candidate
 
-Run [prepare_release.py](scripts/prepare_release.py) with `--version <version>` and the pinned FVM toolchain on the Arch Linux workstation. Dev releases use `0.1.0-dev.YYYYMMDD.N`. Git tags add `v` and AUR replaces the version's hyphen with an underscore. Use the same version for a paired release.
+Run [prepare_release.py](scripts/prepare_release.py) with `--version <version>` and the pinned FVM toolchain on the Arch Linux workstation. Dev releases use `0.1.0-dev.YYYYMMDD.N`; all non-dev releases (alpha, beta, and stable) use `X.Y.Z` without any suffix and pass `--allow-stable`. Git tags add `v` and AUR replaces the version's hyphen with an underscore. Use the same version for a paired release.
 
-The helper synchronizes versions and lockfiles, regenerates notices, checks the source, builds the Linux x86_64 release, and stages the archive and AUR metadata in `build/release/<version>/`. It installs from the archive and verifies the installed bundle. Keep debug and release checks sequential within each checkout. Inspect the desktop entry, command, running service, and affected desktop interactions.
+The helper synchronizes versions and lockfiles, regenerates notices, checks the source, builds the Linux x86_64 release, and stages the archive and AUR metadata in `build/release/<version>/` (with target AUR packages under `build/release/<version>/aur/<pkgname>/`). It installs from the archive and verifies the installed bundle. Keep debug and release checks sequential within each checkout. Inspect the desktop entry, command, running service, and affected desktop interactions.
 
 Verify `SHA256SUMS`, run `makepkg` against the staged archive, and run [publish_release.py](scripts/publish_release.py) with `--version <version> --dry-run`. `makepkg --nodeps` can check the package contents when dependencies are unavailable. Present the candidate and validation results, then stop for explicit approval of the installed application.
 
 ## 2. Update README and obtain release approval
 
-After candidate approval, run [review_and_update_readme.py](scripts/review_and_update_readme.py). It uses `agy` with `gemini-3.8-flash-medium` to update README. Use `--base-ref` to override the comparison base. Check the generated text against the installed candidate and repository documentation.
+After candidate approval, use the `remya-readme` skill (`skills/remya-readme/scripts/update_readme.py --channel <dev|alpha|beta|stable>`) to update `README.md` and synchronize `docs/README.{zh-CN,zh-TW,ru,de,es,ja}.md` with `gemini-4-hydrogen-medium` in the `remya-screen-capture` style. Check the generated text against the installed candidate and repository documentation.
 
-Run `prepare_release.py --version <version> --refresh-readme` to repackage the verified bundle with the updated README. If code, installer inputs, or the Bar client dependency changed, prepare a new candidate and repeat the first approval. Repeat the archive, package, and dry-run checks. Open each application's README with `marktext README.md` from its release worktree. Present the README diff and release notes for explicit approval to commit and publish.
+Run `prepare_release.py --version <version> --refresh-readme` to repackage the verified bundle with the updated READMEs. If code, installer inputs, or the Bar client dependency changed, prepare a new candidate and repeat the first approval. Repeat the archive, package, and dry-run checks. Open each application's README with `marktext README.md` from its release worktree. Present the README diffs and release notes for explicit approval to commit and publish.
 
 ## 3. Publish the approved candidate
 
-After both approvals, commit the reviewed changes in focused commits, fast-forward `main`, and push it as directed by the application's Git rules. Keep the prepared worktree until publishing is verified. Run `publish_release.py --version <version> --confirm-user-approved` in the prepared worktree. Add `--notes-file <path>` for reviewed release notes. The script requires a clean checkout matching local and remote `main`, verifies the candidate, and publishes the tag and GitHub release.
+After both approvals, commit the reviewed changes in focused commits, fast-forward `main`, and push it as directed by the application's Git rules. Keep the prepared worktree until publishing is verified. Run `publish_release.py --version <version> --confirm-user-approved` in the prepared worktree (add `--prerelease` for `X.Y.Z` alpha/beta releases, and `--notes-file <path>` for reviewed release notes). The script requires a clean checkout matching local and remote `main`, verifies the candidate, and publishes the tag and GitHub release.
 
-Confirm the remote tag and downloadable assets. Once their checksums match, submit the staged `PKGBUILD` and `.SRCINFO` to the corresponding AUR `remya-settings-bin` or `remya-bar-bin` repository on `master`. Verify package ownership before writing and verify the public AUR version after pushing.
+Confirm the remote tag and downloadable assets. Once their checksums match, submit the staged `PKGBUILD` and `.SRCINFO` from `build/release/<version>/aur/<pkgname>/` to AUR `master` according to the release channel:
+- **Alpha / Beta / Stable release (`X.Y.Z`)**: publish to both `remya-<app_name>` (refresh source tarball `sha256sums` after pushing the GitHub tag) and `remya-<app_name>-bin`.
+- **Dev release (`X.Y.Z-dev.YYYYMMDD.N`)**: publish to `remya-<app_name>-git`.
+
+Verify package ownership before writing and verify the public AUR version after pushing.
 
 ## CI validation
 
