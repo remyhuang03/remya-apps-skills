@@ -32,9 +32,9 @@ def repo_root() -> Path:
 
 
 def app_id(root: Path) -> str:
-    match = re.search(r"^name:[ \t]*(remya_bar|remya_settings)[ \t]*$", (root / "pubspec.yaml").read_text(), re.MULTILINE)
+    match = re.search(r"^name:[ \t]*(remya_bar|remya_settings|remya_screen_capture)[ \t]*$", (root / "pubspec.yaml").read_text(), re.MULTILINE)
     if not match:
-        raise RuntimeError("Run from a Remya Bar or Remya Settings checkout")
+        raise RuntimeError("Run from a Remya application checkout")
     return match.group(1)
 
 

@@ -1,4 +1,6 @@
 from pathlib import Path
+from contextlib import redirect_stdout
+from io import StringIO
 import subprocess
 import sys
 import tempfile
@@ -10,6 +12,7 @@ RELEASE_SCRIPTS = Path(__file__).resolve().parents[1] / "skills/remya-release/sc
 README_SCRIPTS = Path(__file__).resolve().parents[1] / "skills/remya-readme/scripts"
 sys.path.insert(0, str(RELEASE_SCRIPTS))
 sys.path.insert(0, str(README_SCRIPTS))
+import publish_release
 from prepare_release import read_current_versions, render_pkgbuild, resolve_target_version
 from release_checks import app_id, aur_package_names, is_dev_version, repo_root, sibling_client_sha256
 from update_readme import (
@@ -19,11 +22,11 @@ from update_readme import (
 
 
 class ReleaseSkillTest(unittest.TestCase):
-    def test_both_projects_resolve_from_checkout_instead_of_skill_location(self):
+    def test_projects_resolve_from_checkout_instead_of_skill_location(self):
         version = "0.1.0-dev.20261109.0"
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            for project in ("remya-settings", "remya-bar"):
+            for project in ("remya-settings", "remya-bar", "remya-screen-capture"):
                 checkout = workspace / project
                 checkout.mkdir()
                 subprocess.run(["git", "init", "-q", checkout], check=True)
@@ -40,6 +43,13 @@ class ReleaseSkillTest(unittest.TestCase):
                     self.assertEqual(repo_root(), checkout)
                 self.assertEqual(app_id(checkout), name)
                 self.assertEqual(read_current_versions(checkout), (version,) * (3 if project == "remya-settings" else 2))
+                if project == "remya-screen-capture":
+                    pkgbuild = render_pkgbuild(project, "0.1.0", "a" * 64, settings_version=version)
+                    self.assertIn(f"_settings_ver={version}", pkgbuild)
+                    self.assertIn("remya-settings/archive/refs/tags/v", pkgbuild)
+                    with self.assertRaises(ValueError):
+                        render_pkgbuild(project, "0.1.0", "a" * 64)
+                    continue
                 for pkgname in (project, f"{project}-bin", f"{project}-git"):
                     pkgbuild = render_pkgbuild(pkgname, version, "a" * 64)
                     self.assertIn(f"pkgname={pkgname}", pkgbuild)
@@ -69,6 +79,26 @@ class ReleaseSkillTest(unittest.TestCase):
                 resolve_target_version(checkout, "0.1.0", bump=False, allow_stable=False)
             self.assertEqual(resolve_target_version(checkout, "0.1.0", bump=False, allow_stable=True), "0.1.0")
 
+    def test_only_dev_builds_are_github_prereleases(self):
+        for version, prerelease in (("0.1.0", False), ("0.1.0-dev.20261113.0", True)):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                checkout = Path(temporary)
+                (checkout / "pubspec.yaml").write_text("name: remya_settings\n")
+                output = StringIO()
+                with (
+                    patch.object(sys, "argv", ["publish_release.py", "--version", version, "--dry-run"]),
+                    patch.object(publish_release, "repo_root", return_value=checkout),
+                    patch.object(publish_release, "verify_prepared_state",
+                                 return_value=(checkout / "archive.tar.zst", {"base_commit": "HEAD"})),
+                    patch.object(publish_release, "git", return_value=""),
+                    patch.object(publish_release.subprocess, "run") as run,
+                    redirect_stdout(output),
+                ):
+                    self.assertEqual(publish_release.main(), 0)
+                    self.assertEqual(run.call_count, 1)
+                command = next(line for line in output.getvalue().splitlines() if "gh release create" in line)
+                self.assertEqual("--prerelease" in command.split(), prerelease)
+
     def test_readme_model_and_multilang_configuration(self):
         self.assertEqual(DEFAULT_MODEL, "gemini-4-hydrogen-medium")
         self.assertEqual(
@@ -97,7 +127,7 @@ class ReleaseSkillTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             checkout = Path(temporary)
             (checkout / "pubspec.yaml").write_text("name: another_app\n")
-            with self.assertRaisesRegex(RuntimeError, "Remya Bar or Remya Settings"):
+            with self.assertRaisesRegex(RuntimeError, "Remya application checkout"):
                 app_id(checkout)
 
 

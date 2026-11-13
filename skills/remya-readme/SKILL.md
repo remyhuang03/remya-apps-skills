@@ -21,7 +21,7 @@ Every Remya application README supports 7 languages:
 ## Style and structure
 
 Follow the `remya-screen-capture` README style:
-- Centered header block: `<p align="center">` app icon (`width="128"`), `<h1 align="center">` title, `<h3 align="center">` concise tagline, shields.io badges (`Platform`, `Flutter`, `Rust`, `License`), and the 7-language switcher bar.
+- Centered header block: `<p align="center">` app icon (`assets/icons/app_icon-full.svg`, `width="128"`, or `../assets/icons/app_icon-full.svg` in `docs/README.*.md`), `<h1 align="center">` title, `<h3 align="center">` concise tagline, shields.io badges (`Platform`, `Flutter`, `Rust`, `License`), and the 7-language switcher bar.
 - Short intro paragraph + 3 concise highlight bullets, followed by a GitHub-style `> [!WARNING]` notice for `dev` / `alpha` / `beta` stages.
 - Emoji-prefixed top-level headings:
   - `## 🚀 Installation`: AUR installation (`remya-<app>` and `remya-<app>-bin` for `alpha`/`beta`/`stable`, or `remya-<app>-git` for `dev`), GitHub release archive (`tar --zstd -xf`, `SHA256SUMS`, `tool/install.py`), and note that paired installations install Settings before Bar.

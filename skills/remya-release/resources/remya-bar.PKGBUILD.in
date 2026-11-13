@@ -62,7 +62,7 @@ package() {
 
   install -Dm644 "linux/packaging/top.remya.bar.desktop" \
     "${pkgdir}/usr/share/applications/top.remya.bar.desktop"
-  install -Dm644 "assets/icons/bar.svg" \
+  install -Dm644 "assets/icons/app_icon.svg" \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/top.remya.bar.svg"
 
   install -d "${pkgdir}/usr/lib/systemd/user"

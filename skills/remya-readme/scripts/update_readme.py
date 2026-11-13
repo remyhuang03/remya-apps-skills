@@ -148,7 +148,7 @@ the centered header HTML (<p align="center">) and end after the License section.
 Do not wrap the response in a Markdown fence or include an explanation. Do not call any tools.
 
 Follow this exact README structure and visual style:
-1. Centered app icon: `<p align="center"><img src="..." width="128" alt="..."></p>` (keep the existing icon path).
+1. Centered app icon: `<p align="center"><img src="assets/icons/app_icon-full.svg" width="128" alt="..."></p>`.
 2. Centered `<h1 align="center">...</h1>` and `<h3 align="center">...</h3>` concise tagline.
 3. Centered shields.io badges (`<p align="center">...`) for Platform (`Arch Linux | Hyprland`), Flutter, Rust, and License.
 4. Centered 7-language switcher immediately below the badges, matching this exact HTML:

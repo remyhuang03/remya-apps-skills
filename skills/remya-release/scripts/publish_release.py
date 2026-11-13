@@ -10,7 +10,7 @@ import sys
 sys.dont_write_bytecode = True
 from prepare_release import read_current_versions, render_pkgbuild
 from release_checks import (
-    VERSION, app_id, aur_package_names, bundle_sha256, git, github_repo,
+    VERSION, app_id, aur_package_names, bundle_sha256, git, github_repo, is_dev_version,
     installed_bundle, repo_root, sha256_file, sibling_client_sha256,
     skill_sha256, source_sha256,
 )
@@ -42,7 +42,10 @@ def verify_prepared_state(root: Path, version: str) -> tuple[Path, dict]:
 
     for aur_pkg in aur_package_names(project, version):
         aur_dir = release_dir / "aur" / aur_pkg
-        if (aur_dir / "PKGBUILD").read_text() != render_pkgbuild(aur_pkg, version, archive_hash):
+        expected = render_pkgbuild(
+            aur_pkg, version, archive_hash, settings_version=manifest.get("settings_version", "")
+        )
+        if (aur_dir / "PKGBUILD").read_text() != expected:
             raise RuntimeError(f"Staged AUR PKGBUILD for {aur_pkg} does not match the prepared release")
         aur_srcinfo = subprocess.check_output(["makepkg", "--printsrcinfo"], cwd=aur_dir, text=True)
         if (aur_dir / ".SRCINFO").read_text() != aur_srcinfo:
@@ -53,7 +56,7 @@ def verify_prepared_state(root: Path, version: str) -> tuple[Path, dict]:
 
     if manifest.get("skill_sha256") != skill_sha256():
         raise RuntimeError("The release skill changed after preparation")
-    if app_id(root) == "remya_bar" and manifest.get("settings_client_sha256") != sibling_client_sha256(root):
+    if app_id(root) in {"remya_bar", "remya_screen_capture"} and manifest.get("settings_client_sha256") != sibling_client_sha256(root):
         raise RuntimeError("The sibling Settings client changed after preparation")
 
     for bundle in (root / "build/linux/x64/release/bundle", installed_bundle(app_id(root))):
@@ -67,18 +70,18 @@ def main() -> int:
     parser.add_argument("--version", required=True, help="Release version prepared in Phase 1")
     parser.add_argument(
         "--confirm-user-approved", action="store_true",
-        help="Confirm explicit approval of both the installed candidate and the README review",
+        help="Confirm explicit approval of the installed candidate and publication",
     )
     parser.add_argument("--notes-file", type=Path, help="Reviewed GitHub release notes")
-    parser.add_argument("--prerelease", action="store_true", help="Mark GitHub release as prerelease (e.g. alpha/beta)")
     parser.add_argument("--dry-run", action="store_true", help="Check prepared artifacts and print commands")
+    parser.add_argument("--skip-readme", action="store_true", help="Use only when the user has waived the README workflow")
     args = parser.parse_args()
     if not args.dry_run and not args.confirm_user_approved:
         parser.error("Publication requires both approvals and --confirm-user-approved")
 
     root = repo_root()
     archive, manifest = verify_prepared_state(root, args.version)
-    if not args.dry_run and not manifest.get("readme_refreshed"):
+    if not args.dry_run and not args.skip_readme and not manifest.get("readme_refreshed"):
         raise RuntimeError("Complete the README review and refresh the approved archive before publishing")
     tag = f"v{args.version}"
     tag_ref = f"refs/tags/{tag}"
@@ -112,7 +115,7 @@ def main() -> int:
         "gh", "release", "create", tag, "--repo", github_repo(root), "--verify-tag",
         "--title", tag, str(archive), str(archive.with_name("SHA256SUMS")),
     ]
-    if "-" in args.version or args.prerelease:
+    if is_dev_version(args.version):
         release.append("--prerelease")
     if args.notes_file:
         release.extend(["--notes-file", str(args.notes_file.resolve(strict=True))])

@@ -58,7 +58,7 @@ package() {
     "${pkgdir}/usr/share/applications/top.remya.settings.desktop"
   install -Dm644 "linux/packaging/top.remya.settings.appimage.desktop" \
     "${pkgdir}/usr/share/applications/top.remya.settings.appimage.desktop"
-  install -Dm644 "assets/icons/settings.svg" \
+  install -Dm644 "assets/icons/app_icon.svg" \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/top.remya.settings.svg"
 
   install -d "${pkgdir}/usr/share/dbus-1/services"

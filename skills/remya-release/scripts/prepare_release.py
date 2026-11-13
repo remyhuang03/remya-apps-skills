@@ -133,7 +133,12 @@ def sync_version_files(root: Path, version: str) -> None:
 
     run(["fvm", "flutter", "pub", "get"], cwd=root)
     run(["cargo", "metadata", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu"], cwd=root, capture=True)
-    run([sys.executable, "tool/generate_rust_notices.py"], cwd=root)
+    if app_id(root) == "remya_screen_capture":
+        notices = (root / "lib/src/rust/capture/THIRD_PARTY_NOTICES.txt").read_text()
+        if f"Cargo.lock SHA-256: {sha256_file(root / 'Cargo.lock')}" not in notices.splitlines():
+            raise RuntimeError("Update the Screen Capture Rust notices for the current Cargo.lock")
+    else:
+        run([sys.executable, "tool/generate_rust_notices.py"], cwd=root)
 
 
 def run_validation(root: Path, *, skip_desktop_smoke: bool) -> None:
@@ -158,6 +163,8 @@ def run_validation(root: Path, *, skip_desktop_smoke: bool) -> None:
 
     if not settings and not skip_desktop_smoke:
         run(["fvm", "flutter", "build", "linux", "--debug"], cwd=root)
+        if app_id(root) != "remya_bar":
+            return
         run(["cmake", "--build", "build/linux/x64/debug", "--target", "bar_lifecycle_test"], cwd=root)
         run(["build/linux/x64/debug/bundle/bar_lifecycle_test"], cwd=root)
         if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
@@ -191,13 +198,17 @@ def install_staged_release(root: Path, release_dir: Path, version: str, built_ha
     if bundle_sha256(installed_bundle(app_id(root)), app_id(root)) != built_hash:
         raise RuntimeError("Installed workstation bundle differs from the built bundle")
     unit = f"top.{app_id(root).replace('_', '.')}.service"
-    run(["systemctl", "--user", "is-active", "--quiet", unit], cwd=root)
+    if app_id(root) != "remya_screen_capture":
+        run(["systemctl", "--user", "is-active", "--quiet", unit], cwd=root)
 
 
-def render_pkgbuild(pkgname: str, version: str, archive_hash: str) -> str:
+def render_pkgbuild(pkgname: str, version: str, archive_hash: str, *, settings_version: str = "") -> str:
     template = (skill_root() / f"resources/{pkgname}.PKGBUILD.in").read_text()
+    if "@SETTINGS_VER@" in template and not VERSION.fullmatch(settings_version):
+        raise ValueError("The Screen Capture source package requires a published Settings version")
     return (
         template.replace("@UPSTREAM_VER@", version)
+        .replace("@SETTINGS_VER@", settings_version)
         .replace("@PKGVER@", version.replace("-", "_"))
         .replace("@SHA256@", archive_hash)
     )
@@ -223,18 +234,27 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
     bundle_dst.parent.mkdir(parents=True)
     shutil.copytree(root / "build/linux/x64/release/bundle", bundle_dst, symlinks=True)
 
-    common = ("tool/install.py", "assets/licenses/rust-dependencies.txt", "LICENSE", "README.md")
+    common = ("tool/install.py", "LICENSE", "README.md")
+    if app_id(root) != "remya_screen_capture":
+        common += ("assets/licenses/rust-dependencies.txt",)
     extras = (
         "tool/install_system_updater.py",
         "linux/packaging/top.remya.settings.desktop",
         "linux/packaging/top.remya.settings.appimage.desktop",
         "linux/packaging/top.remya.settings.Service1.service",
-        "assets/icons/settings.svg",
+        "assets/icons/app_icon.svg",
         "assets/licenses/croppy-kiwi.txt",
     ) if app_id(root) == "remya_settings" else (
         "linux/packaging/top.remya.bar.desktop",
-        "assets/icons/bar.svg",
+        "assets/icons/app_icon.svg",
     )
+    if app_id(root) == "remya_screen_capture":
+        extras = (
+            "linux/packaging/top.remya.screen_capture.desktop",
+            "assets/icons/app_icon.svg",
+            "assets/licenses/material-symbols.txt",
+            "lib/src/rust/capture/THIRD_PARTY_NOTICES.txt",
+        )
     for relative in (*common, *extras):
         target = staging_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -265,7 +285,9 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
     for aur_pkg in aur_packages:
         aur_dir = release_dir / "aur" / aur_pkg
         aur_dir.mkdir(parents=True, exist_ok=True)
-        (aur_dir / "PKGBUILD").write_text(render_pkgbuild(aur_pkg, version, archive_hash))
+        (aur_dir / "PKGBUILD").write_text(render_pkgbuild(
+            aur_pkg, version, archive_hash, settings_version=manifest.get("settings_version", "")
+        ))
         aur_srcinfo = run(["makepkg", "--printsrcinfo"], cwd=aur_dir, capture=True).stdout
         (aur_dir / ".SRCINFO").write_text(aur_srcinfo)
 
@@ -335,6 +357,8 @@ def main() -> int:
             raise RuntimeError(f"Version files differ: {versions}")
     else:
         version = resolve_target_version(root, args.version, bump=args.bump, allow_stable=args.allow_stable)
+    if app_id(root) == "remya_screen_capture" and is_dev_version(version):
+        raise ValueError("The release skill has no Screen Capture -git recipe")
     if not VERSION.fullmatch(version):
         raise ValueError(f"Invalid release version: {version!r}")
     if args.version and args.version != version:
@@ -359,7 +383,7 @@ def main() -> int:
         run_validation(root, skip_desktop_smoke=args.ci or args.skip_desktop_smoke)
 
     source_hash = source_sha256(root)
-    client_hash = sibling_client_sha256(root) if app_id(root) == "remya_bar" else None
+    client_hash = sibling_client_sha256(root) if app_id(root) in {"remya_bar", "remya_screen_capture"} else None
     bundle_hash = build_release(root)
     if source_sha256(root) != source_hash:
         raise RuntimeError("Source files changed during the release build")
@@ -372,7 +396,7 @@ def main() -> int:
         "version": version,
         "tag": f"v{version}",
         "pkgver": version.replace("-", "_"),
-        "prerelease": "-" in version,
+        "prerelease": is_dev_version(version),
         "bundle_sha256": bundle_hash,
         "source_sha256": source_hash,
         "candidate_source_sha256": candidate_source_sha256(root),
@@ -381,6 +405,11 @@ def main() -> int:
         "readme_refreshed": False,
         "skill_sha256": skill_sha256(),
     }
+    if app_id(root) == "remya_screen_capture":
+        settings_versions = read_current_versions(root.parent / "remya-settings")
+        if len(set(settings_versions)) != 1 or not VERSION.fullmatch(settings_versions[0]):
+            raise RuntimeError("Screen Capture requires matching Settings and client release versions")
+        manifest["settings_version"] = settings_versions[0]
     if client_hash is not None:
         manifest["settings_client_sha256"] = client_hash
     release_dir = stage_release_artifacts(root, version, manifest, ci=args.ci)
@@ -403,7 +432,7 @@ def main() -> int:
         print(f"  - {release_dir / 'aur' / aur_pkg / 'PKGBUILD'}")
         print(f"  - {release_dir / 'aur' / aur_pkg / '.SRCINFO'}")
     print("============================================================")
-    print("STOP HERE: Get candidate approval before asking Gemini to update README.md.")
+    print("STOP HERE: Present the installed candidate for approval.")
     return 0
 
 
