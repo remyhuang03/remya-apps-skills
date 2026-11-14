@@ -229,6 +229,13 @@ def render_pkgbuild(pkgname: str, version: str, archive_hash: str, *, core_versi
     )
 
 
+def copy_install_script(project: str, directory: Path) -> None:
+    """Places the project's pacman install script next to its PKGBUILD, if it has one."""
+    script = skill_root() / f"resources/{project}.install"
+    if script.is_file():
+        shutil.copyfile(script, directory / script.name)
+
+
 def stage_release_artifacts(root: Path, version: str, manifest: dict, *, ci: bool = False) -> Path:
     release_dir = root / ("build/ci-release" if ci else "build/release") / version
     release_dir.mkdir(parents=True, exist_ok=True)
@@ -259,7 +266,7 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
     if app_id(root) not in {"remya_screen_capture", "remya_launcher"}:
         common += ("assets/licenses/rust-dependencies.txt",)
     if core:
-        extras = ("tool/install_system_updater.py", "packaging/top.remya.Core1.service")
+        extras = ("packaging/top.remya.Core1.service", "packaging/50-top.remya.core.update.rules")
     else:
         package = "top.remya.screen_capture" if app_id(root) == "remya_screen_capture" else "top." + app_id(root).replace("_", ".")
         extras = (f"linux/packaging/{package}.desktop", "assets/icons/app_icon.svg")
@@ -292,6 +299,7 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
 
     project = app_id(root).replace("_", "-")
     (release_dir / "PKGBUILD").write_text(render_pkgbuild(f"{project}-bin", version, archive_hash))
+    copy_install_script(project, release_dir)
     srcinfo = run(["makepkg", "--printsrcinfo"], cwd=release_dir, capture=True).stdout
     (release_dir / ".SRCINFO").write_text(srcinfo)
 
@@ -302,6 +310,7 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
         (aur_dir / "PKGBUILD").write_text(render_pkgbuild(
             aur_pkg, version, archive_hash, core_version=manifest.get("core_version", "")
         ))
+        copy_install_script(project, aur_dir)
         aur_srcinfo = run(["makepkg", "--printsrcinfo"], cwd=aur_dir, capture=True).stdout
         (aur_dir / ".SRCINFO").write_text(aur_srcinfo)
 
