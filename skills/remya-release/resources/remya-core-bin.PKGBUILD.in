@@ -24,6 +24,7 @@ depends=(
 provides=("remya-core=${pkgver}")
 conflicts=('remya-core' 'remya-core-git')
 options=('!strip')
+install=remya-core.install
 source=("${_app_id}-${_upstream_ver}-linux-x86_64.tar.zst::${url}/releases/download/v${_upstream_ver}/${_app_id}-${_upstream_ver}-linux-x86_64.tar.zst")
 sha256sums=('@SHA256@')
 
@@ -33,6 +34,7 @@ package() {
   install -d "${pkgdir}/usr/lib/remya-core" "${pkgdir}/usr/bin"
   install -m755 target/release/{remyad,remya-core-update,remya} "${pkgdir}/usr/lib/remya-core/"
   ln -s /usr/lib/remya-core/remya "${pkgdir}/usr/bin/remya"
+  install -Dm644 packaging/50-top.remya.core.update.rules "${pkgdir}/usr/share/polkit-1/rules.d/50-top.remya.core.update.rules"
 
   install -Dm644 packaging/top.remya.Core1.service "${pkgdir}/usr/share/dbus-1/services/top.remya.Core1.service"
   sed -i 's|@REMYAD@|/usr/lib/remya-core/remyad|' "${pkgdir}/usr/share/dbus-1/services/top.remya.Core1.service"

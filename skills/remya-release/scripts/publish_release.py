@@ -12,7 +12,7 @@ from prepare_release import read_current_versions, render_pkgbuild
 from release_checks import (
     VERSION, app_id, aur_package_names, bundle_sha256, git, github_repo, is_dev_version,
     installed_bundle, release_bundle, repo_root, sha256_file, sibling_core_sha256,
-    skill_sha256, source_sha256,
+    skill_root, skill_sha256, source_sha256,
 )
 
 
@@ -47,6 +47,9 @@ def verify_prepared_state(root: Path, version: str) -> tuple[Path, dict]:
         )
         if (aur_dir / "PKGBUILD").read_text() != expected:
             raise RuntimeError(f"Staged AUR PKGBUILD for {aur_pkg} does not match the prepared release")
+        script = skill_root() / f"resources/{project}.install"
+        if script.is_file() and (aur_dir / script.name).read_bytes() != script.read_bytes():
+            raise RuntimeError(f"Staged {script.name} for {aur_pkg} does not match the release skill")
         aur_srcinfo = subprocess.check_output(["makepkg", "--printsrcinfo"], cwd=aur_dir, text=True)
         if (aur_dir / ".SRCINFO").read_text() != aur_srcinfo:
             raise RuntimeError(f"Staged AUR .SRCINFO for {aur_pkg} does not match PKGBUILD")

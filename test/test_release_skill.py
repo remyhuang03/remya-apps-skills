@@ -119,7 +119,7 @@ class ReleaseSkillTest(unittest.TestCase):
         bundle = release_bundle(root)
         bundle.mkdir(parents=True)
         if project == "remya-core":
-            files += ["tool/install_system_updater.py", "packaging/top.remya.Core1.service"]
+            files += ["packaging/top.remya.Core1.service", "packaging/50-top.remya.core.update.rules"]
             for binary in ("remyad", "remya-core-update", "remya"):
                 (bundle / binary).write_text(binary)
             (bundle / "unrelated-build-file").write_text("must not be archived")
@@ -206,6 +206,8 @@ class ReleaseSkillTest(unittest.TestCase):
                             self.assertEqual((destination / "usr/bin/remya").readlink(), Path("/usr/lib/remya-core/remya"))
                             self.assertIn("Exec=/usr/lib/remya-core/remyad", (destination / "usr/share/dbus-1/services/top.remya.Core1.service").read_text())
                             self.assertTrue((destination / "usr/lib/systemd/user/top.remya.core.service").is_file())
+                            self.assertTrue((destination / "usr/share/polkit-1/rules.d/50-top.remya.core.update.rules").is_file())
+                            self.assertTrue((release / "remya-core.install").is_file())
                         elif project == "remya-settings":
                             self.assertFalse((destination / "usr/lib/systemd").exists())
                             self.assertFalse((destination / "usr/share/dbus-1").exists())
