@@ -10,7 +10,7 @@ arch=('x86_64')
 url="https://github.com/remyhuang03/remya-settings"
 license=('LicenseRef-PolyForm-Noncommercial-1.0.0')
 depends=(
-  'remya-core'
+  'remya-core>=0.2.0'
   'gtk3'
   'gstreamer'
   'gst-plugins-base-libs'
@@ -64,6 +64,6 @@ package() {
     "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dm644 "assets/licenses/rust-dependencies.txt" \
     "${pkgdir}/usr/share/licenses/${pkgname}/rust-dependencies.txt"
-  install -Dm644 "assets/licenses/croppy-kiwi.txt" \
+  install -Dm644 "build/linux/x64/release/bundle/data/flutter_assets/packages/remya_ui/assets/licenses/croppy-kiwi.txt" \
     "${pkgdir}/usr/share/licenses/${pkgname}/croppy-kiwi.txt"
 }

@@ -17,6 +17,8 @@ sys.path.insert(0, str(RELEASE_SCRIPTS))
 sys.path.insert(0, str(README_SCRIPTS))
 import prepare_release
 import publish_release
+import publish_aur
+import batch_release
 from prepare_release import read_current_versions, render_pkgbuild, resolve_target_version
 from release_checks import app_id, aur_package_names, is_dev_version, repo_root, sibling_core_sha256, bundle_sha256, release_bundle
 from update_readme import (
@@ -61,7 +63,7 @@ class ReleaseSkillTest(unittest.TestCase):
                     self.assertIn(f"pkgname={pkgname}", pkgbuild)
                     self.assertNotIn("@CORE_VER@", pkgbuild)
                     if project != "remya-core":
-                        self.assertIn("'remya-core'", pkgbuild)
+                        self.assertRegex(pkgbuild, r"'remya-core(?:>=0\.2\.0)?'")
                         if project != "remya-settings":
                             self.assertNotIn("'remya-settings'", pkgbuild)
                         if not suffix:
@@ -129,14 +131,19 @@ class ReleaseSkillTest(unittest.TestCase):
                 target = bundle / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(relative)
+            (bundle / "data/flutter_assets/version.json").write_text(
+                json.dumps({"version": read_current_versions(root)[0]}))
             if project == "remya-settings":
-                files += ["linux/packaging/top.remya.settings.appimage.desktop", "assets/licenses/croppy-kiwi.txt"]
+                files += ["linux/packaging/top.remya.settings.appimage.desktop",
+                          "build/linux/x64/release/bundle/data/flutter_assets/packages/remya_ui/assets/licenses/croppy-kiwi.txt"]
             else:
                 files += [f"linux/packaging/{project}.json"]
             if project == "remya-bar":
                 files += ["build/linux/x64/release/bundle/share/licenses/virtual-keyboard-unstable-v1.xml"]
             if project == "remya-launcher":
-                files += ["build/linux/x64/release/bundle/remya-launcher-clipboard", "build/linux/x64/release/bundle/data/licenses/clipboard-rust-notices.txt"]
+                files += [f"build/linux/x64/release/bundle/remya-launcher-{sidecar}"
+                          for sidecar in ("clipboard", "calculator", "apps", "web", "files")]
+                files += ["build/linux/x64/release/bundle/data/licenses/rust-notices.txt"]
             if project == "remya-screen-capture":
                 files += ["assets/licenses/material-symbols.txt", "lib/src/rust/capture/THIRD_PARTY_NOTICES.txt"]
         for relative in files:
@@ -149,6 +156,15 @@ class ReleaseSkillTest(unittest.TestCase):
         elif project != "remya-settings":
             (root / f"linux/packaging/top.remya.{name.removeprefix('remya_')}.desktop").write_text(
                 f"[Desktop Entry]\nExec={name}\nActions=settings;\n\n[Desktop Action settings]\nName=Settings\nExec={name} --settings\n")
+
+    def test_stale_about_version_blocks_packaging(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.make_checkout(Path(temporary), "remya-bar", "0.2.0")
+            self.populate_bundle(root)
+            path = release_bundle(root) / "data/flutter_assets/version.json"
+            path.write_text('{"version":"0.1.0"}')
+            with self.assertRaisesRegex(RuntimeError, "Bundled app version '0.1.0' does not match '0.2.0'"):
+                prepare_release.stage_release_artifacts(root, "0.2.0", {})
 
     @unittest.skipUnless(shutil.which("makepkg") and shutil.which("zstd"), "Arch packaging tools required")
     def test_fixture_archives_packages_and_candidate_guards(self):
@@ -181,6 +197,18 @@ class ReleaseSkillTest(unittest.TestCase):
                         shutil.copytree(release_bundle(root), installed)
                     with patch.object(publish_release, "installed_bundle", return_value=installed):
                         publish_release.verify_prepared_state(root, version)
+                    self.assertIn("usr/", (release / "package-files.txt").read_text())
+                    if project == "remya-core":
+                        # Exercise both reusing the archive and replacing a populated AUR staging tree.
+                        with patch.object(prepare_release, "installed_bundle", return_value=installed):
+                            archive = release / f"{name}-{version}-linux-x86_64.tar.zst"
+                            old_hash = prepare_release.sha256_file(archive)
+                            prepare_release.refresh_readme(root, version)
+                            self.assertEqual(prepare_release.sha256_file(archive), old_hash)
+                            (root / "README.md").write_text("Refreshed README\n")
+                            prepare_release.refresh_readme(root, version)
+                            self.assertNotEqual(prepare_release.sha256_file(archive), old_hash)
+                            self.assertTrue(json.loads((release / "manifest.json").read_text())["readme_refreshed"])
                     extracted = workspace / "extracted" / project
                     extracted.mkdir(parents=True)
                     subprocess.run(["tar", "--zstd", "-xf", str(release / f"{name}-{version}-linux-x86_64.tar.zst"), "-C", str(extracted)], check=True)
@@ -222,7 +250,9 @@ class ReleaseSkillTest(unittest.TestCase):
                                 self.assertIn("After=top.remya.core.service", text)
                                 if project == "remya-launcher":
                                     self.assertIn("UMask=0077\nLimitCORE=0", text)
-                                    self.assertTrue((destination / "usr/lib/remya_launcher/remya-launcher-clipboard").is_file())
+                                    for sidecar in ("clipboard", "calculator", "apps", "web", "files"):
+                                        self.assertTrue((destination / f"usr/lib/remya_launcher/remya-launcher-{sidecar}").is_file())
+                                    self.assertTrue((destination / "usr/lib/systemd/user/top.remya.launcher.apps.service").is_file())
                     if project != "remya-core":
                         changed = core / "packages/remya_ui/changed.dart"
                         changed.write_text(project)
@@ -274,6 +304,64 @@ class ReleaseSkillTest(unittest.TestCase):
                     self.assertEqual(run.call_count, 1)
                 command = next(line for line in output.getvalue().splitlines() if "gh release create" in line)
                 self.assertEqual("--prerelease" in command.split(), prerelease)
+
+    def test_batch_orders_core_first_and_stops_on_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            core = self.make_checkout(workspace, "remya-core")
+            bar = self.make_checkout(workspace, "remya-bar")
+            settings = self.make_checkout(workspace, "remya-settings")
+            plan = workspace / "plan.json"
+            plan.write_text(json.dumps([
+                {"checkout": bar.name, "version": "0.2.0"},
+                {"checkout": settings.name, "version": "0.1.0-dev.20261118.0"},
+                {"checkout": core.name, "version": "0.2.0"},
+            ]))
+            # Patch the child runner without intercepting the git checks that load the plan.
+            entries = batch_release.load_plan(plan)
+            with (
+                patch.object(batch_release, "load_plan", return_value=entries),
+                patch.object(sys, "argv", ["batch_release.py", "prepare", str(plan)]),
+                patch.object(batch_release.subprocess, "run", side_effect=[
+                    subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 12),
+                ]) as run,
+            ):
+                self.assertEqual(batch_release.main(), 12)
+            self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [core, settings])
+            self.assertIn("--allow-stable", run.call_args_list[0].args[0])
+            self.assertNotIn("--allow-stable", run.call_args_list[1].args[0])
+
+    def test_existing_release_is_verified_without_republishing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.make_checkout(Path(temporary), "remya-bar")
+            archive = root / "candidate.tar.zst"
+            archive.write_bytes(b"reviewed archive")
+            sums = root / "SHA256SUMS"
+            sums.write_text("reviewed checksum file\n")
+            destination = root / "download"
+            destination.mkdir()
+            release = {"tagName": "v0.2.0", "isDraft": False, "isPrerelease": False, "url": "release URL"}
+            for path in (archive, sums):
+                shutil.copyfile(path, destination / path.name)
+            with (
+                patch.object(publish_release, "release_info", return_value=release),
+                patch.object(publish_release, "network") as network,
+                patch.object(publish_release.subprocess, "run") as run,
+            ):
+                publish_release.publish_github(root, "v0.2.0", archive, ["create"], destination, None)
+                run.assert_not_called()
+                self.assertIn("download", network.call_args.args[0])
+                (destination / archive.name).write_bytes(b"different archive")
+                with self.assertRaisesRegex(RuntimeError, "Downloaded GitHub asset differs"):
+                    publish_release.publish_github(root, "v0.2.0", archive, ["create"], destination, None)
+                run.assert_not_called()
+
+    def test_aur_version_comes_from_recipe_metadata_without_adding_epoch(self):
+        old = "pkgbase = remya-bar-bin\n\tpkgver = 0.1.0\n\tpkgrel = 1\n\tepoch = 1\n"
+        new = "pkgbase = remya-bar-bin\n\tpkgver = 0.2.0\n\tpkgrel = 1\n"
+        self.assertEqual(publish_aur.package_version(old), "1:0.1.0-1")
+        self.assertEqual(publish_aur.package_version(new), "0.2.0-1")
+        self.assertNotIn("\nepoch=", render_pkgbuild("remya-bar-bin", "0.2.0", "a" * 64))
 
     def test_readme_model_and_multilang_configuration(self):
         self.assertEqual(DEFAULT_MODEL, "gemini-4-hydrogen-medium")

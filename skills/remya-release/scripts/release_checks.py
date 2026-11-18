@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 VERSION = re.compile(
     r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
@@ -23,6 +24,36 @@ def aur_package_names(project: str, version: str) -> tuple[str, ...]:
 
 def git(root: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
+
+
+def network(command: list[str], cwd: Path, *, missing: str = "") -> str | None:
+    """Retry transient transport errors. Mutations must be safe to repeat."""
+    transient = re.compile(
+        r"timed? out|timeout|TLS|GnuTLS|SSL_ERROR|unexpected EOF|connection (?:reset|closed|refused)|"
+        r"temporary failure|could not resolve|remote end hung up|recv failure|HTTP[/ ](?:\d(?:\.\d)? )?5\d\d|"
+        r"requested URL returned error: 5\d\d", re.IGNORECASE,
+    )
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GH_PROMPT_DISABLED="1")
+    for attempt in range(3):
+        try:
+            result = subprocess.run(command, cwd=cwd, env=env, text=True, capture_output=True, timeout=240)
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise
+        else:
+            if result.returncode == 0:
+                return result.stdout.strip()
+            if missing and result.stderr.strip() == missing:
+                return None
+            if attempt == 2 or not transient.search(result.stderr):
+                raise RuntimeError(f"{' '.join(command)} failed: {result.stderr.strip() or result.stdout.strip()}")
+        time.sleep(2 ** attempt)
+
+
+def remote_ref(root: Path, remote: str, ref: str) -> str:
+    output = network(["git", "ls-remote", remote, ref, f"{ref}^{{}}"], root)
+    refs = {name: commit for commit, name in (line.split() for line in output.splitlines())}
+    return refs.get(f"{ref}^{{}}", refs.get(ref, ""))
 
 
 def repo_root() -> Path:
@@ -46,7 +77,7 @@ def skill_root() -> Path:
 
 def skill_sha256() -> str:
     root = skill_root()
-    files = [root / "SKILL.md", *root.glob("scripts/*.py"), *root.glob("resources/*.in")]
+    files = [root / "SKILL.md", *root.glob("scripts/*.py"), *root.glob("resources/*")]
     return files_sha256(root, [path.relative_to(root) for path in files])
 
 

@@ -13,19 +13,22 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 sys.dont_write_bytecode = True
 from release_checks import (
     VERSION, app_id, aur_package_names, bundle_sha256, git, installed_bundle,
-    is_dev_version, release_bundle, repo_root, sha256_file, sibling_core_sha256, skill_root,
+    is_dev_version, release_bundle, remote_ref, repo_root, sha256_file, sibling_core_sha256, skill_root,
     skill_sha256, source_sha256,
 )
 
@@ -104,6 +107,9 @@ def resolve_target_version(root: Path, requested: str | None, *, bump: bool, all
 
 
 def sync_version_files(root: Path, version: str) -> None:
+    screen_capture = app_id(root) == "remya_screen_capture"
+    old_lock = (root / "Cargo.lock").read_bytes() if screen_capture else b""
+    old_version = read_current_versions(root)[-1] if screen_capture else ""
     for rel_path in pubspec_paths(root):
         path = root / rel_path
         text = path.read_text()
@@ -132,13 +138,29 @@ def sync_version_files(root: Path, version: str) -> None:
     cargo_path.write_text(new_cargo)
 
     fetch_dart_dependencies(root)
-    run(["cargo", "metadata", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu"], cwd=root, capture=True)
-    if app_id(root) == "remya_screen_capture":
-        notices = (root / "lib/src/rust/capture/THIRD_PARTY_NOTICES.txt").read_text()
-        if f"Cargo.lock SHA-256: {sha256_file(root / 'Cargo.lock')}" not in notices.splitlines():
-            raise RuntimeError("Update the Screen Capture Rust notices for the current Cargo.lock")
+    metadata = run(["cargo", "metadata", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu"], cwd=root, capture=True)
+    if screen_capture:
+        update_screen_capture_notices(root, old_lock, old_version, version, json.loads(metadata.stdout))
     elif app_id(root) != "remya_launcher":
         run([sys.executable, "tool/generate_rust_notices.py"], cwd=root)
+
+
+def update_screen_capture_notices(root: Path, old_lock: bytes, old_version: str, version: str, metadata: dict) -> None:
+    notices = root / "lib/src/rust/capture/THIRD_PARTY_NOTICES.txt"
+    text = notices.read_text()
+    line = "Cargo.lock SHA-256: "
+    old_marker = line + sha256(old_lock).hexdigest()
+    new_marker = line + sha256_file(root / "Cargo.lock")
+    if new_marker in text.splitlines():
+        return
+    old_packages = tomllib.loads(old_lock.decode())
+    workspace = {package["name"] for package in metadata["packages"] if package["id"] in metadata["workspace_members"]}
+    for package in old_packages["package"]:
+        if "source" not in package and package["name"] in workspace and package["version"] == old_version:
+            package["version"] = version
+    if text.splitlines().count(old_marker) != 1 or old_packages != tomllib.loads((root / "Cargo.lock").read_text()):
+        raise RuntimeError("Update the Screen Capture Rust notices for the current Cargo.lock")
+    notices.write_text(text.replace(old_marker, new_marker))
 
 
 def fetch_dart_dependencies(root: Path, *, locked: bool = False) -> None:
@@ -207,14 +229,76 @@ def install_staged_release(root: Path, release_dir: Path, version: str, built_ha
         extracted = Path(temporary) / stem
         run(["tar", "--zstd", "-xf", str(release_dir / f"{stem}.tar.zst"), "-C", temporary], cwd=root)
         run([sys.executable, "tool/install.py"], cwd=extracted)
+    verify_installed_release(root, version, built_hash)
 
-    if bundle_sha256(installed_bundle(app_id(root)), app_id(root)) != built_hash:
+
+def verify_installed_release(root: Path, version: str, built_hash: str) -> None:
+    app = app_id(root)
+    bundle = installed_bundle(app).resolve()
+    if bundle_sha256(bundle, app) != built_hash:
         raise RuntimeError("Installed workstation bundle differs from the built bundle")
-    unit = f"top.{app_id(root).replace('_', '.')}.service"
-    if app_id(root) == "remya_launcher":
-        unit = "top.remya.launcher.clipboard.service"
-    if app_id(root) in {"remya_core", "remya_bar", "remya_launcher"}:
-        run(["systemctl", "--user", "is-active", "--quiet", unit], cwd=root)
+    data = bundle.parents[1]
+    command = "remya" if app == "remya_core" else app
+    if (Path.home() / ".local/bin" / command).resolve() != bundle / command:
+        raise RuntimeError(f"Installed command {command} does not target {bundle}")
+
+    if app == "remya_core":
+        activation = (data / "dbus-1/services/top.remya.Core1.service").read_text().splitlines()
+        if f"Exec={shlex.quote(str(bundle / 'remyad'))}" not in activation:
+            raise RuntimeError("Core D-Bus activation does not target the installed daemon")
+        about = run([str(bundle / command), "get", "about"], cwd=root, capture=True).stdout
+        if json.loads(about)["version"] != version:
+            raise RuntimeError(f"The running Core service does not report version {version}")
+        units = {"top.remya.core.service": "remyad"}
+    else:
+        desktop = data / f"applications/top.remya.{app.removeprefix('remya_')}.desktop"
+        # Desktop entries escape backslashes in the value before applying Exec quoting.
+        target = str(bundle / command).replace("%", "%%")
+        target = re.sub(r'([\\"`$])', r'\\\1', target).replace("\\", "\\\\")
+        executable = next((line for line in desktop.read_text().splitlines() if line.startswith("Exec=")), "")
+        if executable != f'Exec=/usr/bin/env "{target}"':
+            raise RuntimeError(f"Desktop entry {desktop} does not target {bundle}")
+        units = {
+            "remya_bar": {"top.remya.bar.service": "remya_bar"},
+            "remya_launcher": {"top.remya.launcher.clipboard.service": "remya-launcher-clipboard"},
+        }.get(app, {})
+        if app == "remya_launcher" and (bundle / "remya-launcher-apps").is_file():
+            units["top.remya.launcher.apps.service"] = "remya-launcher-apps"
+    for unit, executable in units.items():
+        status = run(["systemctl", "--user", "show", unit, "-p", "MainPID", "-p", "ExecStart"], cwd=root, capture=True)
+        properties = dict(line.split("=", 1) for line in status.stdout.splitlines())
+        # A unit can restrict access to /proc/<pid>/exe. Verify the configured
+        # executable and live PID in that case.
+        pid = int(properties["MainPID"])
+        process = Path(f"/proc/{pid}")
+        try:
+            running = (process / "exe").readlink() == bundle / executable
+        except PermissionError:
+            running = f"path={bundle / executable} ;" in properties["ExecStart"]
+        except FileNotFoundError:
+            running = False
+        if not pid or not process.is_dir() or not running:
+            raise RuntimeError(f"{unit} is not running {bundle / executable}")
+
+
+def check_binary_package(release_dir: Path, *, ci: bool = False) -> None:
+    run(["sha256sum", "-c", "SHA256SUMS"], cwd=release_dir)
+    paths = [release_dir / name for name in ("PKGBUILD", ".SRCINFO", "SHA256SUMS")]
+    paths.extend(release_dir.glob("*.tar.zst"))
+    paths.extend(release_dir.glob("*.install"))
+    with tempfile.TemporaryDirectory(prefix="remya-package-") as temporary:
+        directory = Path(temporary)
+        for path in paths:
+            (directory / path.name).symlink_to(path)
+        env = dict(os.environ, PKGDEST=temporary, SRCDEST=temporary, BUILDDIR=temporary)
+        subprocess.run(["makepkg", "--nodeps", "--clean"], cwd=directory, env=env, check=True)
+        packages = [path for path in directory.glob("*.pkg.tar.*") if not path.name.endswith(".sig")]
+        if len(packages) != 1:
+            raise RuntimeError("Expected one x86_64 binary package from the staged archive")
+        listing = run(["bsdtar", "-tf", str(packages[0])], cwd=directory, capture=True).stdout
+        (release_dir / "package-files.txt").write_text(listing)
+        if ci:
+            shutil.copy2(packages[0], release_dir / packages[0].name)
 
 
 def render_pkgbuild(pkgname: str, version: str, archive_hash: str, *, core_version: str = "") -> str:
@@ -238,14 +322,21 @@ def copy_install_script(project: str, directory: Path) -> None:
 
 def stage_release_artifacts(root: Path, version: str, manifest: dict, *, ci: bool = False) -> Path:
     release_dir = root / ("build/ci-release" if ci else "build/release") / version
-    release_dir.mkdir(parents=True, exist_ok=True)
+    release_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=release_dir.parent) as temporary:
-        staging = Path(temporary)
+        staging = Path(temporary) / "candidate"
+        staging.mkdir()
         write_release_artifacts(root, version, manifest, staging)
-        for artifact in staging.iterdir():
-            if artifact.name != "manifest.json":
-                artifact.replace(release_dir / artifact.name)
-        (staging / "manifest.json").replace(release_dir / "manifest.json")
+        check_binary_package(staging, ci=ci)
+        backup = Path(temporary) / "previous"
+        try:
+            if release_dir.exists():
+                release_dir.rename(backup)
+            staging.rename(release_dir)
+        except BaseException:
+            if backup.exists() and not release_dir.exists():
+                backup.rename(release_dir)
+            raise
     return release_dir
 
 
@@ -260,6 +351,13 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
         for binary in ("remyad", "remya-core-update", "remya"):
             shutil.copy2(release_bundle(root) / binary, bundle_dst / binary)
     else:
+        version_file = release_bundle(root) / "data/flutter_assets/version.json"
+        try:
+            bundled_version = json.loads(version_file.read_text())["version"]
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise RuntimeError(f"Cannot read the app version from {version_file}") from error
+        if bundled_version != version:
+            raise RuntimeError(f"Bundled app version {bundled_version!r} does not match {version!r}: {version_file}")
         shutil.copytree(release_bundle(root), bundle_dst, symlinks=True)
 
     common = ("tool/install.py", "LICENSE", "README.md")
@@ -271,7 +369,7 @@ def write_release_artifacts(root: Path, version: str, manifest: dict, release_di
         package = "top.remya.screen_capture" if app_id(root) == "remya_screen_capture" else "top." + app_id(root).replace("_", ".")
         extras = (f"linux/packaging/{package}.desktop", "assets/icons/app_icon.svg")
         if app_id(root) == "remya_settings":
-            extras += ("linux/packaging/top.remya.settings.appimage.desktop", "assets/licenses/croppy-kiwi.txt")
+            extras += ("linux/packaging/top.remya.settings.appimage.desktop",)
         else:
             extras += (f"linux/packaging/{app_id(root).replace('_', '-')}.json",)
         if app_id(root) == "remya_screen_capture":
@@ -345,7 +443,14 @@ def refresh_readme(root: Path, version: str) -> Path:
     archive = release_dir / f"{app_id(root)}-{version}-linux-x86_64.tar.zst"
     if sha256_file(archive) != manifest["archive_sha256"]:
         raise RuntimeError("Candidate archive changed after preparation")
-    manifest.update(source_sha256=source_sha256(root), readme_refreshed=True)
+    updated_hash = source_sha256(root)
+    if updated_hash == manifest["source_sha256"]:
+        manifest["readme_refreshed"] = True
+        with tempfile.NamedTemporaryFile(mode="w", dir=release_dir, delete=False) as handle:
+            handle.write(json.dumps(manifest, indent=2) + "\n")
+        Path(handle.name).replace(release_dir / "manifest.json")
+        return release_dir
+    manifest.update(source_sha256=updated_hash, readme_refreshed=True)
     return stage_release_artifacts(root, version, manifest)
 
 
@@ -386,12 +491,15 @@ def main() -> int:
         raise ValueError(f"Invalid release version: {version!r}")
     if args.version and args.version != version:
         raise ValueError(f"Requested version {args.version} differs from {version}")
-    if not args.ci and (git(root, "tag", "--list", f"v{version}") or git(
-        root, "ls-remote", "origin", f"refs/tags/v{version}"
+    if not args.ci and (git(root, "tag", "--list", f"v{version}") or remote_ref(
+        root, "origin", f"refs/tags/v{version}"
     )):
         raise RuntimeError(f"Release tag v{version} already exists")
     if args.refresh_readme:
+        readmes = ["README.md", ":(glob)docs/README.*.md"]
+        run(["git", "diff", "--check", "HEAD", "--", *readmes], cwd=root)
         release_dir = refresh_readme(root, version)
+        run(["git", "diff", "--no-ext-diff", "HEAD", "--", *readmes], cwd=root)
         print(f"README refreshed in {release_dir}. Present the README diff for release approval.")
         return 0
     if args.ci:
@@ -436,8 +544,6 @@ def main() -> int:
         manifest["core_packages_sha256"] = core_hash
     release_dir = stage_release_artifacts(root, version, manifest, ci=args.ci)
     if args.ci:
-        run(["sha256sum", "-c", "SHA256SUMS"], cwd=release_dir)
-        run(["makepkg", "--nodeps", "--clean"], cwd=release_dir)
         print(f"CI package verified in {release_dir}")
         return 0
     install_staged_release(root, release_dir, version, bundle_hash)
